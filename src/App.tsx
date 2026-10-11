@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   addEdge,
   Background,
@@ -38,7 +38,6 @@ import {
   getCurrentStreak,
   isHabitScheduled,
   readAppData,
-  STORAGE_KEY,
   todayKey,
   type AppData,
   type Habit,
@@ -47,6 +46,7 @@ import {
   type Session,
   type Task,
 } from './data'
+import { createSyncClient, type SyncClient, type SyncStatus } from './sync'
 
 const weekdays = ['日', '一', '二', '三', '四', '五', '六']
 const habitColors = ['mint', 'coral', 'yellow', 'lavender']
@@ -66,6 +66,17 @@ function greeting() {
   return hour < 11 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
 }
 
+const syncLabels: Record<SyncStatus, { short: string; full: string }> = {
+  local: { short: '仅本地', full: '数据保存在浏览器中。运行 daily 命令行后，两端会共用同一份数据文件。' },
+  connecting: { short: '连接中', full: '正在连接本地同步服务…' },
+  synced: { short: '已同步', full: '与命令行版共用同一份数据文件。' },
+  offline: { short: '待重连', full: '本地同步服务暂时不可用，改动已保存在浏览器，服务恢复后会自动上传。' },
+}
+
+function syncLabel(status: SyncStatus, full = false) {
+  return full ? syncLabels[status].full : syncLabels[status].short
+}
+
 function App() {
   const [appData, setAppData] = useState<AppData>(readAppData)
   const [page, setPage] = useState<Page>('today')
@@ -74,9 +85,28 @@ function App() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(appData.edges)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('local')
+  const syncRef = useRef<SyncClient | null>(null)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData))
+    const client = createSyncClient({
+      onStatus: setSyncStatus,
+      onRemote: (data) => {
+        setAppData(data)
+        setNodes(data.nodes)
+        setEdges(data.edges)
+      },
+    })
+    syncRef.current = client
+    client.start()
+    return () => {
+      syncRef.current = null
+      client.stop()
+    }
+  }, [])
+
+  useEffect(() => {
+    syncRef.current?.push(appData)
   }, [appData])
 
   useEffect(() => {
@@ -240,7 +270,7 @@ function App() {
       <main className="main-area">
         <header className="topbar">
           <div className="breadcrumb"><span>我的空间</span><ChevronRight size={14} /><strong>{pageTitle}</strong></div>
-          <div className="topbar-actions"><span className="date-chip"><span className="date-dot" />{dateLabel()}</span><button className="icon-button" title="帮助" aria-label="帮助"><CircleHelp size={19} /></button></div>
+          <div className="topbar-actions"><span className={`sync-chip ${syncStatus}`} title={syncLabel(syncStatus, true)}><span className="sync-dot" /><span className="sync-label">{syncLabel(syncStatus)}</span></span><span className="date-chip"><span className="date-dot" />{dateLabel()}</span><button className="icon-button" title="帮助" aria-label="帮助"><CircleHelp size={19} /></button></div>
         </header>
         <div className="page-wrap">
           {page !== 'roadmap' && (
