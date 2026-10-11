@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  dayKey,
   getCurrentStreak,
   isHabitScheduled,
   readAppData,
@@ -353,7 +354,7 @@ function HabitsView({ habits, onCheck, onAdd }: { habits: Habit[]; onCheck: (id:
   const weekDates = Array.from({ length: 7 }, (_, index) => {
     const date = new Date()
     date.setDate(date.getDate() - ((date.getDay() + 6) % 7) + index)
-    return date.toISOString().slice(0, 10)
+    return dayKey(date)
   })
   return <section className="panel full-panel">
     <div className="section-head"><div><p className="section-kicker">BUILD YOUR RHYTHM</p><h2>习惯追踪</h2><p className="panel-description">每一次打卡，都是给自己的一个小小承诺。</p></div><button className="primary-button" onClick={onAdd}><Plus size={16} />新建习惯</button></div>

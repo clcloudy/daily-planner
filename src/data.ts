@@ -39,7 +39,13 @@ export type AppData = {
 }
 
 export const STORAGE_KEY = 'daily-planner-v1'
-export const todayKey = () => new Date().toISOString().slice(0, 10)
+export const dayKey = (date: Date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+export const todayKey = () => dayKey(new Date())
 
 export const starterData: AppData = {
   habits: [
@@ -96,7 +102,7 @@ export function getCurrentStreak(habit: Habit, now = new Date()) {
   const cursor = new Date(now)
   cursor.setHours(0, 0, 0, 0)
   const logSet = new Set(habit.logs)
-  while (logSet.has(cursor.toISOString().slice(0, 10))) {
+  while (logSet.has(dayKey(cursor))) {
     streak += 1
     cursor.setDate(cursor.getDate() - 1)
   }

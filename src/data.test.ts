@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getCurrentStreak, isHabitScheduled, type Habit } from './data'
+import { dayKey, getCurrentStreak, isHabitScheduled, type Habit } from './data'
 
 describe('habit helpers', () => {
   it('checks repeat days', () => {
@@ -14,7 +14,7 @@ describe('habit helpers', () => {
     yesterday.setDate(today.getDate() - 1)
     const habit: Habit = {
       id: '1', title: 'Read', days: [0, 1, 2, 3, 4, 5, 6], color: 'mint',
-      logs: [yesterday.toISOString().slice(0, 10), today.toISOString().slice(0, 10)],
+      logs: [dayKey(yesterday), dayKey(today)],
     }
     expect(getCurrentStreak(habit, today)).toBe(2)
   })
