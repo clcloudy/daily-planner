@@ -1,23 +1,14 @@
 @echo off
-setlocal
+rem Launch the daily planner CLI in a new PowerShell window.
+rem Keep this file ASCII-only with CRLF line endings: cmd mis-parses UTF-8 or LF-only batch files.
 cd /d "%~dp0"
-chcp 65001 >nul
+if not exist "cli\daily.mjs" goto missing
 
-where node >nul 2>nul
-if errorlevel 1 (
-  echo 未检测到 Node.js。请先安装 Node.js 20.19+ 或 22.12+，然后重新运行本脚本。
-  echo 下载地址：https://nodejs.org/
-  pause
-  exit /b 1
-)
+start "daily-planner" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Host 'Node.js not found. Install Node.js 20.19+ or 22.12+ first: https://nodejs.org/' -ForegroundColor Yellow; Read-Host 'Press Enter to close' } else { node 'cli\daily.mjs'; if ($LASTEXITCODE -ne 0) { Write-Host ('daily exited with code ' + $LASTEXITCODE) -ForegroundColor Yellow; Read-Host 'Press Enter to close' } }"
 
-rem 命令行版零依赖，不需要 npm install，也不会启动 Vite。
-node "cli\daily.mjs" %*
+exit /b 0
 
-if errorlevel 1 (
-  echo.
-  echo 命令行版退出时报告了错误，请查看上方信息。
-  pause
-)
-
-endlocal
+:missing
+echo Cannot find cli\daily.mjs. Please keep this script in the project folder.
+pause
+exit /b 1
