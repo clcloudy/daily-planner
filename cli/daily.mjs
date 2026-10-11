@@ -161,8 +161,13 @@ async function main() {
         session.ok = false
       }
     }
-    if (serverInfo && !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+    const built = fs.existsSync(path.join(DIST_DIR, 'index.html'))
+    if (serverInfo && !built) {
       session.message = `网页版还没构建：运行 npm run build 后，浏览器打开 ${serverInfo.url} 即可与这里同步。`
+      session.ok = true
+    } else if (serverInfo && !session.exists) {
+      // 数据文件还没建立时，先让浏览器把自己的数据写进来，避免示例数据覆盖它。
+      session.message = `还没有数据文件。建议先在浏览器打开 ${serverInfo.url} 导入网页版已有的数据。`
       session.ok = true
     }
     if (session.corrupted) {

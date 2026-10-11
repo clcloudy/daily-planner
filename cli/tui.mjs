@@ -76,7 +76,7 @@ export function startTui({ session, theme, status = () => '' }) {
   let ticker = null
   let finish = () => {}
 
-  if (!session.message) session.message = session.exists ? '' : `已创建新数据文件：${session.file}`
+  if (!session.message) session.message = session.exists ? '' : `还没有数据文件，当前显示的是示例数据：${session.file}`
   session.ok = session.ok !== false
 
   function size() {

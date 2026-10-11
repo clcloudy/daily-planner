@@ -120,6 +120,10 @@ describe('网页版与命令行版的同步', () => {
     expect(received[0].tasks[0].title).toBe('命令行里的待办')
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).tasks[0].title).toBe('命令行里的待办')
     expect(meta().dirty).toBe(false)
+    // 没同步过的浏览器数据会被替换，但替换前留下备份。
+    const backupKey = Object.keys(localStorage).find((key) => key.startsWith(`${STORAGE_KEY}-backup-`))
+    expect(backupKey).toBeTruthy()
+    expect(JSON.parse(localStorage.getItem(backupKey)).tasks[0].title).toBe('过期的浏览器数据')
   })
 
   it('命令行改动会通过 SSE 推送到网页版', async () => {

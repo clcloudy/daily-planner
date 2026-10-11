@@ -39,6 +39,20 @@ function writeLocal(data: AppData) {
   }
 }
 
+/**
+ * 浏览器从未同步过、但本地已有数据时，第一次接受数据文件的内容前先留一份备份。
+ * 典型场景：先在命令行里勾了一下习惯（于是文件只包含示例数据），浏览器里的真实数据不该被它替换掉。
+ */
+function backupLocal(revision: number) {
+  if (revision > 0) return
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) localStorage.setItem(`${STORAGE_KEY}-backup-${Date.now()}`, raw)
+  } catch {
+    // 存储不可用时跳过备份。
+  }
+}
+
 /** 只有从本地同步服务（而不是纯静态服务器或 file://）打开页面时才同步。 */
 export function syncAvailable() {
   return typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && typeof EventSource !== 'undefined'
@@ -71,6 +85,7 @@ export function createSyncClient(options: { onRemote: (data: AppData) => void; o
 
   function adopt(state: RemoteState) {
     const data = normalizeAppData(state.data)
+    backupLocal(meta.revision)
     known = JSON.stringify(data)
     meta = { revision: state.revision, updatedAt: state.updatedAt, dirty: false }
     writeLocal(data)
