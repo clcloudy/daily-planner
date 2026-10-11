@@ -59,14 +59,29 @@ function readBody(request) {
   })
 }
 
-function sameOrigin(request) {
-  const origin = request.headers.origin
-  if (!origin) return true
+const LOCAL_HOSTS = ['127.0.0.1', 'localhost', '::1', '[::1]']
+
+/**
+ * 网页版可能从别的本地端口打开（例如 vite dev 的 5173），
+ * 只对本地来源开放跨来源读写，其它网站既读不到也写不进来。
+ */
+function localOrigin(origin) {
+  if (!origin) return null
   try {
-    return new URL(origin).host === request.headers.host
+    return LOCAL_HOSTS.includes(new URL(origin).hostname) ? origin : null
   } catch {
-    return false
+    return null
   }
+}
+
+function applyCors(request, response) {
+  const allowed = localOrigin(request.headers.origin)
+  if (!allowed) return null
+  response.setHeader('access-control-allow-origin', allowed)
+  response.setHeader('access-control-allow-methods', 'GET, PUT, OPTIONS')
+  response.setHeader('access-control-allow-headers', 'content-type')
+  response.setHeader('vary', 'Origin')
+  return allowed
 }
 
 function serveStatic(request, response, root) {
@@ -129,6 +144,13 @@ export async function startServer({ store, port = DEFAULT_PORT, host = '127.0.0.
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host ?? '127.0.0.1'}`)
+    const cors = url.pathname.startsWith('/api/') ? applyCors(request, response) : null
+
+    if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+      response.writeHead(cors ? 204 : 403)
+      response.end()
+      return
+    }
 
     if (url.pathname === '/api/health') {
       sendJson(response, 200, { ok: true, app: APP_ID, port: server.address()?.port ?? 0, file: store.file, clients: clients.size, version: 1, pid: process.pid, ...snapshot(store) })
@@ -141,7 +163,8 @@ export async function startServer({ store, port = DEFAULT_PORT, host = '127.0.0.
         return
       }
       if (request.method === 'PUT') {
-        if (!sameOrigin(request)) {
+        const origin = request.headers.origin
+        if (origin && !localOrigin(origin)) {
           sendJson(response, 403, { error: 'forbidden' })
           return
         }

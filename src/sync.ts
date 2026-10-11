@@ -53,9 +53,29 @@ function backupLocal(revision: number) {
   }
 }
 
-/** 只有从本地同步服务（而不是纯静态服务器或 file://）打开页面时才同步。 */
+/** 只有从本地页面打开时才同步；数据文件由本地服务写入。 */
 export function syncAvailable() {
   return typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && typeof EventSource !== 'undefined'
+}
+
+const DEFAULT_SERVER = 'http://127.0.0.1:8787'
+const SERVER_KEY = 'daily-planner-server'
+
+/**
+ * 同步服务可能在别的本地端口上（例如网页版仍用 vite dev 的 5173 打开）。
+ * 先试同来源，再试默认端口；也可以用 localStorage 的 daily-planner-server 指定地址。
+ */
+function serverCandidates() {
+  const candidates = ['']
+  let override = ''
+  try {
+    override = localStorage.getItem(SERVER_KEY) ?? ''
+  } catch {
+    override = ''
+  }
+  const fallback = (override || DEFAULT_SERVER).replace(/\/$/, '')
+  if (window.location.origin !== fallback) candidates.push(fallback)
+  return candidates
 }
 
 export type SyncClient = {
@@ -79,6 +99,7 @@ export function createSyncClient(options: { onRemote: (data: AppData) => void; o
   let retryIndex = 0
   let retryTimer = 0
   let known = ''
+  let base = ''
   let meta = readMeta()
 
   const setStatus = options.onStatus
@@ -106,7 +127,7 @@ export function createSyncClient(options: { onRemote: (data: AppData) => void; o
     }
     inFlight = true
     try {
-      const response = await fetch('/api/data', {
+      const response = await fetch(`${base}/api/data`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body,
@@ -129,7 +150,7 @@ export function createSyncClient(options: { onRemote: (data: AppData) => void; o
 
   function openStream() {
     source?.close()
-    const stream = new EventSource('/api/events')
+    const stream = new EventSource(`${base}/api/events`)
     source = stream
     stream.addEventListener('open', () => {
       retryIndex = 0
@@ -152,33 +173,42 @@ export function createSyncClient(options: { onRemote: (data: AppData) => void; o
   async function connect() {
     if (stopped) return
     setStatus('connecting')
-    let state: RemoteState
-    try {
-      const controller = new AbortController()
-      const timer = window.setTimeout(() => controller.abort(), 1500)
-      const response = await fetch('/api/data', { signal: controller.signal })
-      window.clearTimeout(timer)
-      if (response.status === 404) {
+    let state: RemoteState | null = null
+    let networkError = false
+    let httpResponded = false
+    for (const candidate of serverCandidates()) {
+      try {
+        const controller = new AbortController()
+        const timer = window.setTimeout(() => controller.abort(), 1500)
+        const response = await fetch(`${candidate}/api/data`, { signal: controller.signal })
+        window.clearTimeout(timer)
+        httpResponded = true
+        if (!response.ok) continue
+        // 静态服务器（例如 vite dev）可能把未知路径回退成 index.html，这里只接受 JSON。
+        if (!(response.headers.get('content-type') ?? '').includes('application/json')) continue
+        state = (await response.json()) as RemoteState
+        base = candidate
+        break
+      } catch {
+        networkError = true
+      }
+    }
+    if (stopped) return
+    if (!state) {
+      // 没有任何候选地址上跑着同步服务：短暂重试后安静地退回浏览器存储。
+      const hopeless = retryIndex >= RETRY_DELAYS.length || (!networkError && httpResponded)
+      if (hopeless) {
         setStatus('local')
         return
       }
-      if (!response.ok) throw new Error(String(response.status))
-      // 静态服务器（例如 vite dev）可能把未知路径回退成 index.html，这里只接受 JSON。
-      if (!(response.headers.get('content-type') ?? '').includes('application/json')) {
-        setStatus('local')
-        return
-      }
-      state = (await response.json()) as RemoteState
-    } catch {
-      if (stopped) return
       setStatus('offline')
       const delay = RETRY_DELAYS[Math.min(retryIndex, RETRY_DELAYS.length - 1)]
       retryIndex += 1
       retryTimer = window.setTimeout(() => void connect(), delay)
       return
     }
-    if (stopped) return
     ready = true
+    retryIndex = 0
     if (state.exists && !meta.dirty) {
       // 数据文件已存在：以文件为准。
       if (state.revision !== meta.revision) adopt(state)

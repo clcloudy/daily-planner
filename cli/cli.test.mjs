@@ -218,6 +218,25 @@ describe('本地同步服务', () => {
     })
     expect(response.status).toBe(403)
   })
+
+  it('允许本地其它端口的网页跨来源读写', async () => {
+    const store = tempStore()
+    const server = await startServer({ store, port: 0 })
+    cleanups.push(() => server.close())
+    const base = `http://127.0.0.1:${server.port}`
+
+    const preflight = await fetch(`${base}/api/data`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:5173', 'access-control-request-method': 'PUT' } })
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173')
+
+    const put = await fetch(`${base}/api/data`, {
+      method: 'PUT',
+      body: JSON.stringify({ data: normalizeAppData({ tasks: [{ id: 't1', title: '来自开发页面' }] }) }),
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
+    })
+    expect(put.status).toBe(200)
+    expect(store.read().data.tasks[0].title).toBe('来自开发页面')
+  })
 })
 
 describe('交互界面', () => {

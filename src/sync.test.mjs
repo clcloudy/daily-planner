@@ -9,6 +9,8 @@ import { createStore } from '../cli/store.mjs'
 import { STORAGE_KEY, SYNC_META_KEY, normalizeAppData } from './data.ts'
 import { createSyncClient } from './sync.ts'
 
+const SERVER_KEY = 'daily-planner-server'
+
 const cleanups = []
 let base = ''
 let store
@@ -93,6 +95,30 @@ afterEach(() => {
 })
 
 describe('网页版与命令行版的同步', () => {
+  it('页面从别的本地端口打开时，也能找到同步服务', async () => {
+    // 模拟 vite dev：同来源没有 /api，只能靠默认端口找到服务。
+    const nodeFetch = globalThis.fetch
+    globalThis.fetch = (input, init) => {
+      const target = typeof input === 'string' && input.startsWith('/') ? new URL(input, 'http://127.0.0.1:5173') : input
+      return nodeFetch(target, init)
+    }
+    globalThis.EventSource = class {
+      addEventListener() {}
+      close() {}
+    }
+    store.write(normalizeAppData({ tasks: [{ id: 't1', title: '跨来源读取' }] }))
+    const previous = localStorage.getItem(SERVER_KEY)
+    localStorage.setItem(SERVER_KEY, base)
+    const received = []
+    const client = createSyncClient({ onRemote: (data) => received.push(data), onStatus: () => {} })
+    cleanups.push(() => client.stop())
+    client.start()
+    await waitFor(() => received.length > 0)
+    expect(received[0].tasks[0].title).toBe('跨来源读取')
+    if (previous === null) localStorage.removeItem(SERVER_KEY)
+    else localStorage.setItem(SERVER_KEY, previous)
+  })
+
   it('数据文件不存在时，用浏览器里的数据建立文件', async () => {
     const data = normalizeAppData({ tasks: [{ id: 't1', title: '浏览器里的待办', priority: 'high' }] })
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
