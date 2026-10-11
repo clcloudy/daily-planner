@@ -26,7 +26,8 @@ export function createSession(store, options = {}) {
     corrupted: Boolean(initial.corrupted),
     page: options.page ?? 'today',
     cursor: 0,
-    filter: 'open',
+    // 待办默认显示全部：完成的项要留在列表里灰色显示，而不是凭空消失。
+    filter: options.filter ?? 'all',
     now: new Date(),
     message: options.message ?? '',
     ok: true,
@@ -151,8 +152,9 @@ export function helpLines(theme) {
     cmd('del task <待办>', '删除待办'),
     '',
     head('专注'),
-    cmd('focus start [待办]', '开始一个 25 分钟番茄钟'),
-    cmd('focus stop', '暂停并重置计时器'),
+    cmd('focus start [习惯|待办]', '开始一个 25 分钟番茄钟，可绑定习惯或待办'),
+    cmd('focus break', `开始 ${BREAK_MINUTES} 分钟休息`),
+    cmd('focus stop', '结束当前计时器'),
     '',
     head('数据'),
     cmd('sync', '重新读取数据文件'),
@@ -162,13 +164,15 @@ export function helpLines(theme) {
     '',
     head('快捷键'),
     key('1 / 2 / 3 · Tab', '切换页面'),
-    key('j / k · ↑ / ↓', '移动光标，空格切换状态'),
+    key('j / k · ↑ / ↓', '移动光标'),
+    key('f', '选择专注目标（习惯 / 待办 / 自由专注）'),
+    key('space', '习惯直接打卡；待办会先确认再切换状态'),
     key('a · d · e', '添加 / 删除 / 编辑光标项'),
-    key('f', '开始或暂停番茄钟'),
-    key(': 之后', '输入命令，Tab 补全，↑ ↓ 翻历史'),
+    key(':', '输入命令，Tab 补全，↑ ↓ 翻历史'),
     key('r · ? · q', '重新读取数据文件 · 帮助 · 退出'),
     '',
     theme.faint('  提示：#1 表示当前列表里的第一项；也可以用名称、ID 前缀或唯一标题片段。'),
+    theme.faint('  提示：专注结束后按 b 休息，按 e 结束本轮。'),
   ]
 }
 
@@ -179,6 +183,12 @@ function resolveHabitTarget(session, key, forceKind) {
 
 function resolveTaskTarget(session, key) {
   return resolveTask({ ...session, page: 'tasks' }, key)
+}
+
+/** 专注目标既可以是待办，也可以是习惯（习惯用 habits 页的解析规则，避免待办遮蔽同名项）。 */
+function resolveFocusTarget(session, key) {
+  if (!key) return null
+  return resolveTaskTarget(session, key) ?? resolveHabitTarget(session, key, 'habit')
 }
 
 export function runCommand(session, line) {
@@ -327,25 +337,31 @@ export function runCommand(session, line) {
   if (verb === 'focus' || verb === 'pomo' || verb === 'timer') {
     const action = (args[0] ?? 'start').toLowerCase()
     if (['stop', 'reset'].includes(action)) {
-      session.save({ ...session.data, timer: { ...session.data.timer, endAt: null } })
-      return done(session, '计时器已暂停。')
+      session.save({ ...session.data, timer: { mode: 'focus', endAt: null } })
+      return done(session, '计时器已结束。')
+    }
+    if (action === 'break' || action === 'rest' || action === '休息') {
+      session.save({ ...session.data, timer: { mode: 'break', endAt: Date.now() + BREAK_MINUTES * 60000 } })
+      return done(session, `休息 ${BREAK_MINUTES} 分钟开始。`)
     }
     if (action === 'start') {
       const key = args.slice(1).join(' ')
       const task = key ? resolveTaskTarget(session, key) : null
-      if (key && !task) return fail(`没有找到待办「${key}」`)
-      const minutes = session.data.timer.mode === 'focus' ? FOCUS_MINUTES : BREAK_MINUTES
-      session.save({ ...session.data, timer: { mode: session.data.timer.mode, endAt: Date.now() + minutes * 60000, ...(task ? { taskId: task.id } : {}) } })
-      return done(session, `${session.data.timer.mode === 'focus' ? '专注' : '休息'} ${minutes} 分钟开始${task ? `：${task.title}` : ''}`)
+      const habit = key && !task ? resolveHabitTarget(session, key, 'habit') : null
+      if (key && !task && !habit) return fail(`没有找到专注目标「${key}」`)
+      session.save({ ...session.data, timer: { mode: 'focus', endAt: Date.now() + FOCUS_MINUTES * 60000, ...(task ? { taskId: task.id } : {}), ...(habit ? { habitId: habit.id } : {}) } })
+      const label = task ? `：${task.title}` : habit ? `：${habit.title}` : ''
+      return done(session, `专注 ${FOCUS_MINUTES} 分钟开始${label}`)
     }
     if (action === 'target') {
       const key = args.slice(1).join(' ')
-      const task = key ? resolveTaskTarget(session, key) : null
-      if (key && !task) return fail(`没有找到待办「${key}」`)
-      session.save({ ...session.data, timer: { ...session.data.timer, taskId: task ? task.id : undefined } })
-      return done(session, task ? `专注目标：${task.title}` : '已设为自由专注。')
+      const target = resolveFocusTarget(session, key)
+      if (key && !target) return fail(`没有找到专注目标「${key}」`)
+      const isTask = Boolean(target && session.data.tasks.some((task) => task.id === target.id))
+      session.save({ ...session.data, timer: { ...session.data.timer, taskId: isTask ? target.id : undefined, habitId: target && !isTask ? target.id : undefined } })
+      return done(session, target ? `专注目标：${target.title}` : '已设为自由专注。')
     }
-    return fail('用法：focus start|stop|target <待办>')
+    return fail('用法：focus start [习惯|待办] | focus break | focus stop')
   }
 
   if (verb === 'export') {

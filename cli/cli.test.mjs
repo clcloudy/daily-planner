@@ -161,16 +161,33 @@ describe('页面渲染', () => {
     expect(lines.every((line) => width(line) <= 100)).toBe(true)
   })
 
-  it('页面项目数与待办筛选一致', () => {
+  it('完成的待办会留存并排到未完成之后', () => {
     const session = createSession(emptyStore())
-    runCommand(session, 'add task 一件事')
     runCommand(session, 'add habit 一个习惯')
+    runCommand(session, 'add task 第一件')
+    runCommand(session, 'add task 第二件')
     session.page = 'tasks'
+    expect(pageItems(session).every((item) => item.kind === 'task')).toBe(true)
+    runCommand(session, 'done 第二件')
+    // 默认「全部」筛选：完成的待办仍然在列表里，只是排到后面置灰。
+    expect(pageItems(session).map((item) => item.task.title)).toEqual(['第一件', '第二件'])
+    expect(pageItems(session)[1].task.done).toBe(true)
+    runCommand(session, 'filter open')
     expect(pageItems(session)).toHaveLength(1)
-    runCommand(session, 'done 一件事')
-    expect(pageItems(session)).toHaveLength(0)
     runCommand(session, 'filter done')
     expect(pageItems(session)).toHaveLength(1)
+  })
+
+  it('专注目标可以选择习惯，并为待办设置目标', () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add habit 晨间阅读 --days 每天')
+    runCommand(session, 'add task 整理笔记')
+    expect(runCommand(session, 'focus start 晨间阅读').ok).toBe(true)
+    expect(session.data.timer.habitId).toBe(session.data.habits[0].id)
+    expect(session.data.timer.taskId).toBeUndefined()
+    expect(runCommand(session, 'focus start 整理笔记').ok).toBe(true)
+    expect(session.data.timer.taskId).toBe(session.data.tasks[0].id)
+    expect(runCommand(session, 'focus start 不存在的目标').ok).toBe(false)
   })
 })
 
@@ -240,11 +257,8 @@ describe('本地同步服务', () => {
 })
 
 describe('交互界面', () => {
-  it('按键操作会更新数据并在退出后恢复终端', async () => {
-    const store = tempStore()
-    const session = createSession(store)
-    runCommand(session, 'add habit 晨间阅读 --days 每天')
-
+  /** 用假的 TTY 挂载 TUI，返回按键入口和写出的终端内容。 */
+  async function mountTui(session) {
     const writes = []
     const originalWrite = process.stdout.write
     const originalStdin = process.stdin
@@ -254,12 +268,11 @@ describe('交互界面', () => {
     stdin.resume = () => {}
     stdin.pause = () => {}
     stdin.setEncoding = () => {}
-    let columns = 100
-    let rows = 30
+    const size = { columns: 100, rows: 30 }
     Object.defineProperty(process, 'stdin', { value: stdin, configurable: true })
     Object.defineProperty(process.stdout, 'write', { value: (chunk) => { writes.push(String(chunk)); return true }, configurable: true })
-    Object.defineProperty(process.stdout, 'columns', { get: () => columns, configurable: true })
-    Object.defineProperty(process.stdout, 'rows', { get: () => rows, configurable: true })
+    Object.defineProperty(process.stdout, 'columns', { get: () => size.columns, configurable: true })
+    Object.defineProperty(process.stdout, 'rows', { get: () => size.rows, configurable: true })
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true })
     cleanups.push(() => {
       Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true })
@@ -275,6 +288,15 @@ describe('交互界面', () => {
       stdin.emit('data', text)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
+    return { writes, send, finished, stdin, theme, size }
+  }
+
+  it('按键操作会更新数据并在退出后恢复终端', async () => {
+    const store = tempStore()
+    const session = createSession(store)
+    runCommand(session, 'add habit 晨间阅读 --days 每天')
+
+    const { writes, send, finished, size } = await mountTui(session)
 
     await send(' ')
     expect(session.data.habits[0].logs).toEqual([todayKey()])
@@ -282,8 +304,8 @@ describe('交互界面', () => {
     expect(session.page).toBe('habits')
     await send('3')
     expect(session.page).toBe('tasks')
-    columns = 60
-    rows = 18
+    size.columns = 60
+    size.rows = 18
     await send('\u000c')
     await send(':add task 从命令添加\r')
     expect(session.data.tasks.map((task) => task.title)).toContain('从命令添加')
@@ -294,5 +316,76 @@ describe('交互界面', () => {
 
     expect(writes.join('')).toContain('日常')
     expect(writes.join('')).toContain('\u001b[?1049l')
+  })
+
+  it('待办用快捷键切换完成状态前需要确认', async () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add task 整理笔记')
+    session.page = 'tasks'
+
+    const { writes, send, finished } = await mountTui(session)
+
+    await send(' ')
+    expect(writes.join('')).toContain('确认完成「整理笔记」')
+    expect(session.data.tasks[0].done).toBe(false)
+
+    // 误触后按别的键应当取消，不能改动数据。
+    await send('n')
+    expect(session.data.tasks[0].done).toBe(false)
+
+    await send(' ')
+    await send('y')
+    expect(session.data.tasks[0].done).toBe(true)
+    // 完成的待办仍然留在列表里。
+    expect(pageItems(session).map((item) => item.task.title)).toEqual(['整理笔记'])
+
+    await send('q')
+    await finished
+  })
+
+  it('专注结束后给出休息与结束两个选项，并发出提示音', async () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add habit 晨间阅读 --days 每天')
+    runCommand(session, 'add task 整理笔记')
+    session.page = 'tasks'
+
+    const { writes, send, finished } = await mountTui(session)
+
+    // f 打开专注目标选择器：自由专注 → 习惯 → 未完成待办。
+    await send('f')
+    expect(writes.join('')).toContain('选择专注目标')
+    await send('j')
+    await send('\r')
+    expect(session.data.timer.habitId).toBe(session.data.habits[0].id)
+    expect(session.data.timer.endAt).toBeGreaterThan(Date.now())
+
+    // 把倒计时直接推到终点，等 1 秒定时器触发专注完成。
+    session.save({ ...session.data, timer: { ...session.data.timer, endAt: Date.now() - 1 } })
+    await new Promise((resolve) => setTimeout(resolve, 1400))
+
+    const text = writes.join('')
+    expect(text).toContain('专注完成')
+    expect(text).toContain('b 休息')
+    expect(text).toContain('e 结束本轮')
+    // 时间到时发出提示音（终端响铃）。
+    expect(text).toContain('\u0007')
+    expect(session.data.sessions).toHaveLength(1)
+
+    // 结束后不自动进入休息，按 b 才休息。
+    expect(session.data.timer.endAt).toBeNull()
+    await send('b')
+    expect(session.data.timer.mode).toBe('break')
+    expect(session.data.timer.endAt).toBeGreaterThan(Date.now())
+
+    // 选「结束」时停在空闲状态，也不再自动进入休息。
+    session.save({ ...session.data, timer: { mode: 'focus', endAt: Date.now() - 1 } })
+    await new Promise((resolve) => setTimeout(resolve, 1400))
+    await send('e')
+    expect(session.data.timer.endAt).toBeNull()
+    expect(session.data.timer.mode).toBe('focus')
+    expect(session.data.sessions).toHaveLength(2)
+
+    await send('q')
+    await finished
   })
 })

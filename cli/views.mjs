@@ -7,6 +7,7 @@ import {
   formatFocus,
   getCurrentStreak,
   summarize,
+  todayKey,
   weekDates,
 } from '../src/core.mjs'
 import { pad, padStart, truncate, width } from './theme.mjs'
@@ -17,8 +18,29 @@ export const PAGES = [
   { id: 'tasks', label: '待办' },
 ]
 
+export const TODAY_TASK_LIMIT = 8
+export const TODAY_DONE_LIMIT = 3
+
+/**
+ * 待办始终留存：已完成的排在未完成之后，由渲染层置灰，不会被过滤掉。
+ * filter 只决定“是否包含”已完成项，不改变留存与顺序。
+ */
+export function orderedTasks(tasks, filter = 'all') {
+  if (filter === 'done') return tasks.filter((task) => task.done)
+  const open = tasks.filter((task) => !task.done)
+  if (filter === 'open') return open
+  return [...open, ...tasks.filter((task) => task.done)]
+}
+
 export function filterTasks(data, filter) {
-  return data.tasks.filter((task) => (filter === 'all' ? true : filter === 'done' ? task.done : !task.done))
+  return orderedTasks(data.tasks, filter)
+}
+
+/** 今日页要展示的待办：未完成优先，已完成留一小段灰色提示。 */
+export function todayTasks(data, limit = TODAY_TASK_LIMIT, doneLimit = TODAY_DONE_LIMIT) {
+  const open = data.tasks.filter((task) => !task.done).slice(0, limit)
+  const done = data.tasks.filter((task) => task.done).slice(0, doneLimit)
+  return [...open, ...done]
 }
 
 /** 当前页面里可以上下移动、用空格操作的项目。 */
@@ -29,7 +51,7 @@ export function pageItems(state) {
     return filterTasks(state.data, state.filter).map((task) => ({ kind: 'task', id: task.id, task }))
   }
   const items = summary.scheduledHabits.map((habit) => ({ kind: 'habit', id: habit.id, habit }))
-  for (const task of summary.openTasks.slice(0, 8)) items.push({ kind: 'task', id: task.id, task })
+  for (const task of todayTasks(state.data)) items.push({ kind: 'task', id: task.id, task })
   return items
 }
 
@@ -115,7 +137,7 @@ function todayBody(state, options) {
   const summary = summarize(state.data, state.now)
   const items = pageItems(state)
   const habits = summary.scheduledHabits
-  const tasks = summary.openTasks.slice(0, 8)
+  const tasks = todayTasks(state.data)
   const habitIndex = new Map(items.map((item, index) => [`h:${item.id}`, index]))
   const taskIndex = new Map(items.map((item, index) => [`t:${item.id}`, index]))
 
@@ -132,18 +154,21 @@ function todayBody(state, options) {
   for (const task of tasks) {
     taskLines.push(taskLine(task, { active: options.selected === taskIndex.get(`t:${task.id}`), theme, today: summary.today, titleWidth: taskTitleWidth }))
   }
-  if (summary.openTasks.length > tasks.length) taskLines.push(theme.faint(`  还有 ${summary.openTasks.length - tasks.length} 件…`))
+  const remaining = summary.openTasks.length - tasks.filter((task) => !task.done).length
+  if (remaining > 0) taskLines.push(theme.faint(`  还有 ${remaining} 件未完成…`))
 
   const seconds = timerSeconds(state)
   const total = (state.data.timer.mode === 'focus' ? FOCUS_MINUTES : BREAK_MINUTES) * 60
   const running = Boolean(state.data.timer.endAt)
-  const focusTarget = state.data.timer.taskId ? state.data.tasks.find((task) => task.id === state.data.timer.taskId) : null
+  const focusTarget =
+    (state.data.timer.taskId ? state.data.tasks.find((task) => task.id === state.data.timer.taskId) : null) ??
+    (state.data.timer.habitId ? state.data.habits.find((habit) => habit.id === state.data.timer.habitId) : null)
   const focusLines = [
     theme.muted('专注'),
     `  ${progressBar(seconds, total, 20, theme)}  ${theme.bold(clock(seconds))}`,
     `  ${state.data.timer.mode === 'focus' ? '专注时间' : '休息时间'}${running ? theme.green(' · 进行中') : theme.faint(' · 已暂停')}`,
     `  ${theme.faint(focusTarget ? `目标：${focusTarget.title}` : '自由专注')}`,
-    `  ${theme.faint(summary.todaySessions.length ? `今天已完成 ${summary.todaySessions.length} 个专注时段` : running ? '按 f 暂停计时' : '按 f 开始一个番茄钟')}`,
+    `  ${theme.faint(summary.todaySessions.length ? `今天已完成 ${summary.todaySessions.length} 个专注时段` : running ? '按 f 暂停计时' : '按 f 选择专注目标（习惯 / 待办）')}`,
   ]
 
   const lines = [...summaryStrip(state, theme, contentWidth), rule(contentWidth, theme)]
@@ -219,7 +244,8 @@ function tasksBody(state, options) {
   const items = pageItems(state)
   const index = new Map(items.map((item, position) => [item.id, position]))
   const titleWidth = titleColumn(items.map((item) => item.task.title), Math.max(16, Math.min(40, options.width - 22)))
-  const tally = state.filter === 'done' ? `${state.data.tasks.filter((task) => task.done).length} 件已完成` : `${summary.openTasks.length} 件待处理`
+  const doneCount = state.data.tasks.filter((task) => task.done).length
+  const tally = `${summary.openTasks.length} 件待处理 · ${doneCount} 件已完成`
   const lines = [
     `${['open', 'all', 'done'].map((filter) => (filter === state.filter ? theme.green(`[${filterLabel(filter)}]`) : theme.faint(` ${filterLabel(filter)} `))).join(' ')}   ${theme.faint(tally)}${summary.overdueTasks.length ? `   ${theme.red(`${summary.overdueTasks.length} 件逾期`)}` : ''}`,
     rule(options.width, theme),
@@ -231,11 +257,66 @@ function tasksBody(state, options) {
   for (const item of items) {
     lines.push(taskLine(item.task, { active: options.selected === index.get(item.id), theme, today: summary.today, titleWidth }))
   }
+  if (state.filter === 'open' && doneCount) lines.push('', theme.faint(`  已完成的 ${doneCount} 件在「全部」筛选里灰色留存。`))
   return lines
 }
 
 function filterLabel(filter) {
   return filter === 'open' ? '未完成' : filter === 'all' ? '全部' : '已完成'
+}
+
+/** 专注目标候选：自由专注 + 所有习惯 + 未完成待办。 */
+export function focusChoices(state) {
+  const choices = [{ kind: 'free', id: 'free', title: '自由专注', note: '不绑定目标' }]
+  for (const habit of state.data.habits) {
+    choices.push({ kind: 'habit', id: habit.id, habit, title: habit.title, note: '习惯' })
+  }
+  for (const task of state.data.tasks) {
+    if (task.done) continue
+    choices.push({ kind: 'task', id: task.id, task, title: task.title, note: '待办' })
+  }
+  return choices
+}
+
+/** 当前番茄钟绑定的是哪一项，用于在选择器里做标记。 */
+export function focusChoiceKey(timer) {
+  if (timer?.taskId) return timer.taskId
+  if (timer?.habitId) return timer.habitId
+  return ''
+}
+
+export function renderFocusPicker(state, theme, options = {}) {
+  const width = options.width ?? 80
+  const choices = focusChoices(state)
+  const cursor = Math.max(0, Math.min(options.cursor ?? 0, choices.length - 1))
+  const visible = Math.max(3, options.rows ?? 10)
+  const start = Math.max(0, Math.min(cursor, choices.length - visible))
+  const today = todayKey()
+  const bound = focusChoiceKey(state.data.timer)
+  const lines = [
+    theme.bold('选择专注目标'),
+    theme.faint(`  ${FOCUS_MINUTES} 分钟番茄钟 · j/k 移动 · Enter 开始 · Esc 取消`),
+    rule(width, theme),
+  ]
+  const slice = choices.slice(start, start + visible)
+  for (let offset = 0; offset < slice.length; offset += 1) {
+    const choice = slice[offset]
+    const active = start + offset === cursor
+    const mark = active ? theme.green('› ') : '  '
+    const tag = choice.kind === 'habit' ? theme.blue('习惯') : choice.kind === 'task' ? theme.green('待办') : theme.yellow('自由')
+    const detail =
+      choice.kind === 'habit'
+        ? `${formatDays(choice.habit.days)} · 连续 ${getCurrentStreak(choice.habit)} 天`
+        : choice.kind === 'task'
+          ? `${formatDue(choice.task.dueDate, today) || '无截止'} · ${choice.task.priority === 'high' ? '高' : choice.task.priority === 'low' ? '低' : '中'}优先级`
+          : choice.note
+    const bullet = choice.id === bound ? theme.yellow('● ') : '  '
+    lines.push(`${mark}${bullet}${tag} ${pad(truncate(choice.title, Math.max(8, width - 34)), Math.max(8, width - 34))}${theme.faint(detail)}`)
+  }
+  if (choices.length > visible) {
+    lines.push(theme.faint(`  ${cursor + 1}/${choices.length} · 还有 ${choices.length - visible} 项可滚动`))
+  }
+  return lines
 }
 
 export function renderBody(state, options) {
