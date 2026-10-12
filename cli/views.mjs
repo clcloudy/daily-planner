@@ -10,6 +10,7 @@ import {
   todayKey,
   weekDates,
 } from '../src/core.mjs'
+import { DEFAULT_BINDINGS, keyLabel } from './keys.mjs'
 import { pad, padStart, truncate, width } from './theme.mjs'
 
 export const PAGES = [
@@ -168,7 +169,7 @@ function todayBody(state, options) {
     `  ${progressBar(seconds, total, 20, theme)}  ${theme.bold(clock(seconds))}`,
     `  ${state.data.timer.mode === 'focus' ? '专注时间' : '休息时间'}${running ? theme.green(' · 进行中') : theme.faint(' · 已暂停')}`,
     `  ${theme.faint(focusTarget ? `目标：${focusTarget.title}` : '自由专注')}`,
-    `  ${theme.faint(summary.todaySessions.length ? `今天已完成 ${summary.todaySessions.length} 个专注时段` : running ? '按 f 暂停计时' : '按 f 选择专注目标（习惯 / 待办）')}`,
+    `  ${theme.faint(summary.todaySessions.length ? `今天已完成 ${summary.todaySessions.length} 个专注时段` : running ? `按 ${keyLabel(options.keys, 'focus')} 暂停计时` : `按 ${keyLabel(options.keys, 'focus')} 选择专注目标（习惯 / 待办）`)}`,
   ]
 
   const lines = [...summaryStrip(state, theme, contentWidth), rule(contentWidth, theme)]
@@ -234,7 +235,7 @@ function habitsBody(state, options) {
         `${pad(checked ? theme.green('已打卡') : theme.faint('待打卡'), 8)}${theme.faint(formatDays(habit.days))}`,
     )
   }
-  lines.push('', theme.faint(`今天 ${summary.doneHabits.length}/${summary.scheduledHabits.length} 已完成 · 按空格打卡 · 本周从周一开始`))
+  lines.push('', theme.faint(`今天 ${summary.doneHabits.length}/${summary.scheduledHabits.length} 已完成 · 按 ${keyLabel(options.keys, 'toggle')} 打卡 · 本周从周一开始`))
   return lines
 }
 
@@ -287,15 +288,17 @@ export function focusChoiceKey(timer) {
 
 export function renderFocusPicker(state, theme, options = {}) {
   const width = options.width ?? 80
+  const keys = options.keys ?? DEFAULT_BINDINGS
   const choices = focusChoices(state)
   const cursor = Math.max(0, Math.min(options.cursor ?? 0, choices.length - 1))
   const visible = Math.max(3, options.rows ?? 10)
   const start = Math.max(0, Math.min(cursor, choices.length - visible))
   const today = todayKey()
   const bound = focusChoiceKey(state.data.timer)
+  const move = `${keyLabel(keys, 'down')}/${keyLabel(keys, 'up')}`
   const lines = [
     theme.bold('选择专注目标'),
-    theme.faint(`  ${FOCUS_MINUTES} 分钟番茄钟 · j/k 移动 · Enter 开始 · Esc 取消`),
+    theme.faint(`  ${FOCUS_MINUTES} 分钟番茄钟 · ${move} 移动 · Enter 开始 · Esc 取消`),
     rule(width, theme),
   ]
   const slice = choices.slice(start, start + visible)
@@ -321,7 +324,7 @@ export function renderFocusPicker(state, theme, options = {}) {
 
 export function renderBody(state, options) {
   const page = state.page ?? 'today'
-  const merged = { width: 80, selected: state.cursor ?? -1, ...options }
+  const merged = { width: 80, selected: state.cursor ?? -1, keys: DEFAULT_BINDINGS, ...options }
   if (page === 'habits') return habitsBody(state, merged)
   if (page === 'tasks') return tasksBody(state, merged)
   return todayBody(state, merged)

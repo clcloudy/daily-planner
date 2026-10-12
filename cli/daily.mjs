@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dateLabel, greeting } from '../src/core.mjs'
 import { createSession, helpLines, runCommand } from './commands.mjs'
+import { DEFAULT_BINDINGS, loadBindings } from './keys.mjs'
 import { DIST_DIR, probeServer, resolveServer, startServer } from './server.mjs'
 import { createStore, defaultDataFile } from './store.mjs'
 import { createTheme, pad, width } from './theme.mjs'
@@ -37,7 +38,7 @@ function parseArgv(argv) {
   return { options, rest }
 }
 
-function printPage(session, theme, page) {
+function printPage(session, theme, page, bindings = DEFAULT_BINDINGS) {
   if (page) session.page = page
   const width = Math.min((process.stdout.columns || 84) - 2, 100)
   const now = session.now
@@ -45,7 +46,7 @@ function printPage(session, theme, page) {
   const lines = [
     renderHeader(session, theme, { width, dateText }),
     theme.sep('─'.repeat(width)),
-    ...renderBody(session, { theme, width, selected: -1 }),
+    ...renderBody(session, { theme, width, selected: -1, keys: bindings }),
   ]
   process.stdout.write(`${lines.join('\n').replace(/\s+$/, '')}\n`)
 }
@@ -79,6 +80,7 @@ async function main() {
   const theme = createTheme({ color: options.color })
   const store = createStore(options.data ? path.resolve(options.data) : defaultDataFile())
   const session = createSession(store)
+  const bindings = loadBindings(store.file)
   const verb = (rest[0] ?? '').toLowerCase()
 
   if (verb === 'version') {
@@ -89,7 +91,7 @@ async function main() {
   if (verb === 'help') {
     process.stdout.write(`${theme.bold('日常 daily')} ${theme.faint(VERSION)} · 命令行版\n\n`)
     process.stdout.write(`${theme.muted('用法：daily [页面|命令] [参数] · 不带参数进入交互界面')}\n\n`)
-    process.stdout.write(`${helpLines(theme).join('\n')}\n`)
+    process.stdout.write(`${helpLines(theme, bindings).join('\n')}\n`)
     return
   }
 
@@ -148,7 +150,7 @@ async function main() {
   const interactive = !rest.length || TUI_COMMANDS.has(verb)
   if (interactive) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      printPage(session, theme, 'today')
+      printPage(session, theme, 'today', bindings)
       return
     }
     let serverInfo = null
@@ -189,7 +191,7 @@ async function main() {
   const line = rest.join(' ')
   const result = runCommand(session, line)
   if (result.help) {
-    process.stdout.write(`${helpLines(theme).join('\n')}\n`)
+    process.stdout.write(`${helpLines(theme, result.bindings ?? bindings).join('\n')}\n`)
     return
   }
   if (!result.ok) {
@@ -198,7 +200,7 @@ async function main() {
     return
   }
   if (result.page) {
-    printPage(session, theme, result.page)
+    printPage(session, theme, result.page, result.bindings ?? bindings)
     return
   }
   if (result.message) process.stdout.write(`${theme.green(result.message)}\n`)

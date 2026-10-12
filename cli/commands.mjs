@@ -11,6 +11,7 @@ import {
   parseDayInput,
   todayKey,
 } from '../src/core.mjs'
+import { ACTIONS, DEFAULT_BINDINGS, RESERVED_KEYS, keyHint, loadBindings, normalizeKeyName, saveBindings } from './keys.mjs'
 import { pageItems, resolveHabit, resolveTask } from './views.mjs'
 import { pad } from './theme.mjs'
 
@@ -128,10 +129,11 @@ function findNode(data, key) {
   return prefix.length === 1 ? prefix[0] : null
 }
 
-export function helpLines(theme) {
+export function helpLines(theme, bindings = DEFAULT_BINDINGS) {
   const head = (text) => theme.bold(text)
   const cmd = (text, description) => `  ${theme.green(pad(text, 32))}${theme.muted(description)}`
-  const key = (text, description) => `  ${theme.green(pad(text, 32))}${theme.muted(description)}`
+  // 快捷键列放宽到 36：四个 ctrl 组合键并排也不挤掉说明文字。
+  const key = (text, description) => `  ${theme.green(pad(text, 36))}${theme.muted(description)}`
   return [
     head('页面'),
     cmd('today / t', '回到今日概览'),
@@ -161,18 +163,18 @@ export function helpLines(theme) {
     cmd('export [路径]', '导出 JSON 备份'),
     cmd('import <路径>', '从 JSON 备份恢复'),
     cmd('where', '显示数据文件位置'),
+    cmd('key [动作] [组合键]', '查看 / 修改快捷键位，key reset 恢复默认'),
     '',
     head('快捷键'),
-    key('1 / 2 / 3 · Tab', '切换页面'),
-    key('j / k · ↑ / ↓', '移动光标'),
-    key('f', '选择专注目标（习惯 / 待办 / 自由专注）'),
-    key('space', '习惯直接打卡；待办会先确认再切换状态'),
-    key('a · d · e', '添加 / 删除 / 编辑光标项'),
-    key(':', '输入命令，Tab 补全，↑ ↓ 翻历史'),
-    key('r · ? · q', '重新读取数据文件 · 帮助 · 退出'),
+    key(`${keyHint(bindings, 'page1')} / ${keyHint(bindings, 'page2')} / ${keyHint(bindings, 'page3')} · ${keyHint(bindings, 'next-page')}`, '切换页面'),
+    key(`${keyHint(bindings, 'down')} · ${keyHint(bindings, 'up')}`, '移动光标'),
+    key(`${keyHint(bindings, 'toggle')} · ${keyHint(bindings, 'add')} · ${keyHint(bindings, 'edit')} · ${keyHint(bindings, 'delete')}`, '切换 / 添加 / 编辑 / 删除光标项'),
+    key(`${keyHint(bindings, 'focus')} · ${keyHint(bindings, 'filter')} · ${keyHint(bindings, 'reload')}`, '专注 / 筛选 / 重新读取'),
+    key(`${keyHint(bindings, 'command')} · ${keyHint(bindings, 'help')} · ${keyHint(bindings, 'quit')}`, '命令 · 帮助 · 退出'),
     '',
     theme.faint('  提示：#1 表示当前列表里的第一项；也可以用名称、ID 前缀或唯一标题片段。'),
-    theme.faint('  提示：专注结束后按 b 休息，按 e 结束本轮。'),
+    theme.faint('  提示：专注结束后按 ctrl-b 休息，按 ctrl-e 结束本轮。'),
+    theme.faint('  提示：key <动作> <组合键> 修改键位（如 key quit ctrl-q），key <动作> - 恢复默认。'),
   ]
 }
 
@@ -204,6 +206,38 @@ export function runCommand(session, line) {
   if (verb === 'sync') {
     session.reload()
     return { ok: true, message: '已重新读取数据文件。' }
+  }
+
+  if (verb === 'key' || verb === 'bind') {
+    const file = session.store.file
+    const current = loadBindings(file)
+    const action = (args[0] ?? '').toLowerCase()
+    // 不带参数（或 list）时展开帮助，快捷键表就在帮助里。
+    if (!action || action === 'list') return { ok: true, message: '', help: true, keys: true, bindings: current }
+    if (action === 'reset') {
+      saveBindings(file, DEFAULT_BINDINGS)
+      return { ok: true, message: '已恢复全部默认键位。', keys: true, bindings: DEFAULT_BINDINGS }
+    }
+    const meta = ACTIONS.find((entry) => entry.id === action)
+    if (!meta) return fail(`没有名为「${action}」的动作，可用：${ACTIONS.map((entry) => entry.id).join(' ')}`)
+    if (args.length === 1) {
+      const custom = current[action].join(' / ') !== meta.keys.join(' / ')
+      const note = custom ? `（默认 ${keyHint(DEFAULT_BINDINGS, action)}）` : '（默认）'
+      return { ok: true, message: `${action} 当前键位：${keyHint(current, action)}${note}`, keys: true, bindings: current }
+    }
+    if (args[1] === '-' || args[1].toLowerCase() === 'default') {
+      const next = { ...current, [action]: [...meta.keys] }
+      saveBindings(file, next)
+      return { ok: true, message: `${action} 已恢复默认：${keyHint(DEFAULT_BINDINGS, action)}`, keys: true, bindings: next }
+    }
+    const name = normalizeKeyName(args[1])
+    if (!name) return fail(`无法识别按键「${args[1]}」，可用 ctrl-a ~ ctrl-z、单个字符或 up / down / enter / space 等命名键`)
+    if (RESERVED_KEYS.has(name)) return fail(`${name} 是保留按键（随时退出、重绘），不能绑定`)
+    const owner = ACTIONS.find((entry) => entry.id !== action && current[entry.id].includes(name))
+    if (owner) return fail(`${name} 已绑定给 ${owner.id}，先执行 key ${owner.id} - 解除`)
+    const next = { ...current, [action]: [name] }
+    saveBindings(file, next)
+    return { ok: true, message: `${action} 已绑定到 ${name}`, keys: true, bindings: next }
   }
 
   if (PAGE_ALIASES[verb]) {

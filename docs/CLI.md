@@ -25,20 +25,42 @@ Windows 上双击 `启动日常命令行.bat` 也可以。不需要 `npm install
 
 ## 交互快捷键
 
+快捷指令默认全部是 **ctrl 组合键**（避免误触，也给以后的文字输入留出单键）；光标移动保留 `j` `k` 与方向键。
+
 | 按键 | 作用 |
 | --- | --- |
 | `1` `2` `3` / `Tab` | 切换 今日 / 习惯 / 待办 |
 | `j` `k` / `↑` `↓` | 移动光标 |
-| `空格` / `回车` | 打卡或完成光标所在项 |
-| `a` | 添加（习惯页加习惯，其他页加待办） |
-| `e` | 编辑光标所在项 |
-| `d` | 删除光标所在项（`y` 确认） |
-| `f` | 开始 / 暂停番茄钟 |
-| `r` | 重新读取数据文件 |
-| `=` | 切换待办筛选（未完成 / 全部 / 已完成） |
-| `:` | 输入命令，`Tab` 补全，`↑` `↓` 翻历史 |
-| `?` | 帮助 |
-| `q` | 退出 |
+| `g` / `G` | 跳到第一项 / 最后一项 |
+| `ctrl-t` | 打卡或完成光标所在项 |
+| `ctrl-a` | 添加（习惯页加习惯，其他页加待办） |
+| `ctrl-e` | 编辑光标所在项 |
+| `ctrl-x` | 删除光标所在项（`y` 确认） |
+| `ctrl-f` | 开始 / 暂停番茄钟 |
+| `ctrl-r` | 重新读取数据文件 |
+| `ctrl-o` | 切换待办筛选（未完成 / 全部 / 已完成） |
+| `ctrl-p` | 输入命令，`Tab` 补全，`↑` `↓` 翻历史 |
+| `ctrl-g` | 帮助 |
+| `ctrl-q` | 退出 |
+
+`ctrl-c` / `ctrl-d` 在任何界面下都能直接退出，`ctrl-l` 重绘；这三个是保留键。专注结束后的弹窗用 `ctrl-b` 休息、`ctrl-e` 结束本轮，确认框用 `y` / `n`，这些是弹窗固定键。
+
+## 键位设置
+
+所有快捷键都可以用 `key` 命令修改，配置写在数据文件同目录的 `keys.json`（只存与默认值的差异，网页版同步数据不会影响它）：
+
+```bash
+node cli/daily.mjs key                # 查看全部动作与当前键位（等同帮助）
+node cli/daily.mjs key quit           # 查看单个动作的键位
+node cli/daily.mjs key quit ctrl-w    # 把「退出」改绑到 ctrl-w（覆盖原键位）
+node cli/daily.mjs key quit -         # 恢复该动作的默认键位
+node cli/daily.mjs key reset          # 全部恢复默认
+```
+
+- 可用动作：`quit` `help` `command` `toggle` `add` `edit` `delete` `focus` `reload` `filter` `up` `down` `top` `bottom` `next-page` `prev-page` `page1` `page2` `page3`。
+- 按键写法：`ctrl-a` ~ `ctrl-z`（也接受 `ctrl+q`）、单个字符（区分大小写，如 `g` 与 `G`）、命名键 `up` / `down` / `left` / `right` / `home` / `end` / `tab` / `enter` / `space` / `esc` / `backspace` / `delete`。
+- 已被占用的键会提示先解除；`key <动作> -` 或 `key reset` 可随时恢复默认。
+- 在交互界面里改完键位立即生效，重启后依然有效。
 
 ## 命令
 
@@ -68,6 +90,7 @@ sync                       重新读取数据文件
 export [路径]              导出 JSON 备份
 import <路径>              从 JSON 备份恢复
 where                      显示数据文件位置
+key [动作] [组合键]        查看 / 修改快捷键位，key reset 恢复默认
 ```
 
 - `<习惯>`、`<待办>` 可以写名称、ID 前缀、唯一标题片段，也可以写 `#1`（当前列表第 1 项）。

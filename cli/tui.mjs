@@ -1,5 +1,6 @@
 import { BREAK_MINUTES, FOCUS_MINUTES, createSession, summarize, todayKey } from '../src/core.mjs'
 import { helpLines, pageItems, runCommand } from './commands.mjs'
+import { buildLookup, keyLabel, loadBindings } from './keys.mjs'
 import { PAGES, focusChoiceKey, focusChoices, renderBody, renderFocusPicker, renderHeader, renderTabs, timerSeconds } from './views.mjs'
 import { truncate, width } from './theme.mjs'
 
@@ -11,51 +12,77 @@ const HOME = '\u001b[H'
 const CLEAR_LINE = '\u001b[K'
 const CLEAR_BELOW = '\u001b[J'
 
+const ESCAPE_SEQUENCES = [
+  ['\u001b[A', 'up'],
+  ['\u001b[B', 'down'],
+  ['\u001b[C', 'right'],
+  ['\u001b[D', 'left'],
+  ['\u001b[H', 'home'],
+  ['\u001b[F', 'end'],
+  ['\u001b[Z', 'backtab'],
+  ['\u001b[3~', 'delete'],
+  ['\u001b[1~', 'home'],
+  ['\u001b[4~', 'end'],
+]
+
+/**
+ * 把一段原始输入切成规范键名：ctrl 组合键统一成 ctrl-<字母>，
+ * 方向键等转义序列查表，其余单字符原样返回。
+ * 转义序列只在遇到 ESC 时才查表，普通按键不走这段逻辑。
+ */
 function parseKeys(chunk) {
   const text = chunk.toString('utf8')
   const keys = []
   let index = 0
-  const escapeMap = {
-    '\u001b[A': 'up',
-    '\u001b[B': 'down',
-    '\u001b[C': 'right',
-    '\u001b[D': 'left',
-    '\u001b[H': 'home',
-    '\u001b[F': 'end',
-    '\u001b[Z': 'backtab',
-    '\u001b[3~': 'delete',
-    '\u001b[1~': 'home',
-    '\u001b[4~': 'end',
-  }
   while (index < text.length) {
-    if (text.startsWith('\u001b[200~', index)) {
-      index += 6
+    const code = text.charCodeAt(index)
+    if (code === 0x1b) {
+      if (text.startsWith('\u001b[200~', index)) {
+        index += 6
+        continue
+      }
+      if (text.startsWith('\u001b[201~', index)) {
+        index += 6
+        continue
+      }
+      const sequence = ESCAPE_SEQUENCES.find(([escape]) => text.startsWith(escape, index))
+      if (sequence) {
+        keys.push(sequence[1])
+        index += sequence[0].length
+        continue
+      }
+      keys.push('escape')
+      index += 1
       continue
     }
-    if (text.startsWith('\u001b[201~', index)) {
-      index += 6
+    if (code === 0x0d || code === 0x0a) {
+      keys.push('enter')
+      index += 1
       continue
     }
-    const escape = Object.keys(escapeMap).find((sequence) => text.startsWith(sequence, index))
-    if (escape) {
-      keys.push(escapeMap[escape])
-      index += escape.length
+    if (code === 0x09) {
+      keys.push('tab')
+      index += 1
+      continue
+    }
+    if (code === 0x08 || code === 0x7f) {
+      keys.push('backspace')
+      index += 1
+      continue
+    }
+    if (code >= 0x01 && code <= 0x1a) {
+      keys.push(`ctrl-${String.fromCharCode(0x60 + code)}`)
+      index += 1
+      continue
+    }
+    // 其余控制字符（NUL、ctrl-^ 等）没有对应动作，直接跳过。
+    if (code < 0x20) {
+      index += 1
       continue
     }
     const char = String.fromCodePoint(text.codePointAt(index))
     index += char.length
-    if (char === '\u001b') keys.push('escape')
-    else if (char === '\r' || char === '\n') keys.push('enter')
-    else if (char === '\u007f' || char === '\b') keys.push('backspace')
-    else if (char === '\t') keys.push('tab')
-    else if (char === '\u0003') keys.push('ctrl-c')
-    else if (char === '\u0004') keys.push('ctrl-d')
-    else if (char === '\u0015') keys.push('ctrl-u')
-    else if (char === '\u0001') keys.push('home')
-    else if (char === '\u0005') keys.push('end')
-    else if (char === '\u000c') keys.push('redraw')
-    else if (char < ' ') keys.push('ignore')
-    else keys.push(char)
+    keys.push(char)
   }
   return keys
 }
@@ -78,6 +105,14 @@ export function startTui({ session, theme, status = () => '' }) {
   let closed = false
   let ticker = null
   let finish = () => {}
+  let bindings = loadBindings(session.store.file)
+  let lookup = buildLookup(bindings)
+
+  /** key 命令改完键位后重建反查表；带上命令返回的最新键位就无需再读文件。 */
+  function applyBindings(next) {
+    bindings = next ?? loadBindings(session.store.file)
+    lookup = buildLookup(bindings)
+  }
 
   if (!session.message) session.message = session.exists ? '' : `还没有数据文件，当前显示的是示例数据：${session.file}`
   session.ok = session.ok !== false
@@ -144,7 +179,7 @@ export function startTui({ session, theme, status = () => '' }) {
       })
       // 专注结束后不再自动进入休息，交给使用者选「休息」或「结束」。
       mode = 'rest'
-      session.message = `${target ? `专注完成：${target.title}` : '专注完成'}。b 休息 ${BREAK_MINUTES} 分钟 · e 结束本轮`
+      session.message = `${target ? `专注完成：${target.title}` : '专注完成'}。ctrl-b 休息 ${BREAK_MINUTES} 分钟 · ctrl-e 结束本轮`
       session.ok = true
       bell(3)
     } else {
@@ -170,7 +205,7 @@ export function startTui({ session, theme, status = () => '' }) {
   function buildBody(contentWidth, contentHeight) {
     const items = pageItems(session)
     if (session.cursor >= items.length) session.cursor = Math.max(0, items.length - 1)
-    const body = renderBody(session, { theme, width: contentWidth, selected: session.cursor })
+    const body = renderBody(session, { theme, width: contentWidth, selected: session.cursor, keys: bindings })
     return body.slice(0, contentHeight)
   }
 
@@ -191,7 +226,7 @@ export function startTui({ session, theme, status = () => '' }) {
     const bodyHeight = Math.max(3, rows - reserved)
     const body =
       mode === 'focus-pick'
-        ? renderFocusPicker(session, theme, { width: contentWidth, cursor: pickCursor, rows: Math.max(3, bodyHeight - 4) }).slice(0, bodyHeight)
+        ? renderFocusPicker(session, theme, { width: contentWidth, cursor: pickCursor, rows: Math.max(3, bodyHeight - 4), keys: bindings }).slice(0, bodyHeight)
         : buildBody(contentWidth, bodyHeight)
     for (const line of body) lines.push(indent + line)
     while (lines.length < rows - 2) lines.push('')
@@ -212,16 +247,29 @@ export function startTui({ session, theme, status = () => '' }) {
       const task = pendingToggle?.task
       return { text: ` ${theme.yellow(`确认${task?.done ? '恢复' : '完成'}「${task?.title ?? ''}」？`)}${theme.faint('  y 确认 · 其它键取消')}`, column: 0 }
     }
-    if (mode === 'focus-pick') return { text: ` ${theme.green('选择专注目标')}${theme.faint('  j/k 移动 · Enter 开始 · Esc 取消')}`, column: 0 }
-    if (mode === 'rest') return { text: ` ${theme.yellow('专注完成，时间到！')}${theme.faint(`  b 休息 ${BREAK_MINUTES} 分钟 · e 结束本轮`)}`, column: 0 }
-    return { text: theme.faint(' : 命令   ? 帮助   j/k 移动   space 切换   a 添加   d 删除   f 专注   q 退出'), column: 0 }
+    if (mode === 'focus-pick') {
+      const move = `${keyLabel(bindings, 'down')}/${keyLabel(bindings, 'up')}`
+      return { text: ` ${theme.green('选择专注目标')}${theme.faint(`  ${move} 移动 · Enter 开始 · Esc 取消`)}`, column: 0 }
+    }
+    if (mode === 'rest') return { text: ` ${theme.yellow('专注完成，时间到！')}${theme.faint(`  ctrl-b 休息 ${BREAK_MINUTES} 分钟 · ctrl-e 结束本轮`)}`, column: 0 }
+    const bar = [
+      `${keyLabel(bindings, 'command')} 命令`,
+      `${keyLabel(bindings, 'help')} 帮助`,
+      `${keyLabel(bindings, 'down')}/${keyLabel(bindings, 'up')} 移动`,
+      `${keyLabel(bindings, 'toggle')} 切换`,
+      `${keyLabel(bindings, 'add')} 添加`,
+      `${keyLabel(bindings, 'delete')} 删除`,
+      `${keyLabel(bindings, 'focus')} 专注`,
+      `${keyLabel(bindings, 'quit')} 退出`,
+    ].join(' · ')
+    return { text: theme.faint(` ${bar}`), column: 0 }
   }
 
   function paint() {
     if (closed) return
     const { rows, cols } = size()
     const { lines, contentWidth, indent } = frame()
-    const view = mode === 'help' ? helpLines(theme).map((line) => indent + line) : lines
+    const view = mode === 'help' ? helpLines(theme, bindings).map((line) => indent + line) : lines
     const visible = view.slice(0, rows - 1)
     while (visible.length < rows - 1) visible.push('')
     const bar = commandBar(contentWidth)
@@ -235,7 +283,7 @@ export function startTui({ session, theme, status = () => '' }) {
 
   function complete(text) {
     const [verb] = text.trimStart().split(/\s+/)
-    const verbs = ['today', 'habits', 'tasks', 'check', 'add habit', 'add task', 'done', 'undone', 'pri', 'due', 'del task', 'del habit', 'rename habit', 'filter', 'focus start', 'focus break', 'focus stop', 'sync', 'export', 'import', 'where', 'help', 'quit']
+    const verbs = ['today', 'habits', 'tasks', 'check', 'add habit', 'add task', 'done', 'undone', 'pri', 'due', 'del task', 'del habit', 'rename habit', 'filter', 'focus start', 'focus break', 'focus stop', 'sync', 'export', 'import', 'where', 'help', 'key', 'quit']
     const matches = verbs.filter((candidate) => candidate.startsWith(verb || ''))
     if (!verb) return text
     if (matches.length === 1) return `${matches[0]} `
@@ -269,6 +317,8 @@ export function startTui({ session, theme, status = () => '' }) {
         close()
         return
       }
+      // 键位被命令改写时立刻重建反查表，下一个按键就按新键位走。
+      if (result.keys) applyBindings(result.bindings)
       setMessage(result)
       ensureTicker()
       return
@@ -300,11 +350,11 @@ export function startTui({ session, theme, status = () => '' }) {
       inputCursor = Math.min(input.length, inputCursor + 1)
       return
     }
-    if (key === 'home') {
+    if (key === 'home' || key === 'ctrl-a') {
       inputCursor = 0
       return
     }
-    if (key === 'end') {
+    if (key === 'end' || key === 'ctrl-e') {
       inputCursor = input.length
       return
     }
@@ -378,105 +428,102 @@ export function startTui({ session, theme, status = () => '' }) {
   }
 
   function handleNormalKey(key) {
-    const items = pageItems(session)
-    const pageIndex = PAGES.findIndex((page) => page.id === session.page)
-    if (key === 'q' || key === 'ctrl-c' || key === 'ctrl-d') {
-      close()
-      return
-    }
+    // Esc 常驻：只清提示，不占键位表里的名额。
     if (key === 'escape') {
       session.message = ''
       return
     }
-    if (key === '?' || key === 'F1') {
-      mode = 'help'
-      return
-    }
-    if (key === ':') {
-      mode = 'command'
-      input = ''
-      inputCursor = 0
-      return
-    }
-    if (key >= '1' && key <= '3') {
-      session.page = PAGES[Number(key) - 1].id
-      session.cursor = 0
-      return
-    }
-    if (key === 'tab' || key === 'right' || key === 'l') {
-      session.page = PAGES[(pageIndex + 1) % PAGES.length].id
-      session.cursor = 0
-      return
-    }
-    if (key === 'backtab' || key === 'left') {
-      session.page = PAGES[(pageIndex + PAGES.length - 1) % PAGES.length].id
-      session.cursor = 0
-      return
-    }
-    if (key === 'j' || key === 'down') {
-      session.cursor = Math.min(items.length - 1, session.cursor + 1)
-      return
-    }
-    if (key === 'k' || key === 'up') {
-      session.cursor = Math.max(0, session.cursor - 1)
-      return
-    }
-    if (key === 'g') {
-      session.cursor = 0
-      return
-    }
-    if (key === 'G') {
-      session.cursor = Math.max(0, items.length - 1)
-      return
-    }
-    if (key === ' ' || key === 'enter') {
-      toggleCurrent()
-      return
-    }
-    if (key === 'a') {
-      mode = 'command'
-      input = session.page === 'habits' ? 'add habit ' : 'add task '
-      inputCursor = input.length
-      return
-    }
-    if (key === 'e') {
-      const item = currentItem()
-      if (item?.kind === 'habit') {
+    const action = lookup.get(key)
+    if (!action) return
+    const pageIndex = PAGES.findIndex((page) => page.id === session.page)
+    switch (action) {
+      case 'quit':
+        close()
+        return
+      case 'help':
+        mode = 'help'
+        return
+      case 'command':
         mode = 'command'
-        input = `rename habit ${item.habit.title} `
-        inputCursor = input.length
-      } else if (item?.kind === 'task') {
-        mode = 'command'
-        input = `due ${item.task.title} `
-        inputCursor = input.length
-      }
-      return
-    }
-    if (key === 'd') {
-      const item = currentItem()
-      if (item) {
-        confirmItem = { ...item, title: item.kind === 'habit' ? item.habit.title : item.task.title }
-        mode = 'confirm'
-      }
-      return
-    }
-    if (key === 'f') {
-      if (session.data.timer.endAt) {
-        setMessage(runCommand(session, 'focus stop'))
-        ensureTicker()
+        input = ''
+        inputCursor = 0
+        return
+      case 'next-page':
+        session.page = PAGES[(pageIndex + 1) % PAGES.length].id
+        session.cursor = 0
+        return
+      case 'prev-page':
+        session.page = PAGES[(pageIndex + PAGES.length - 1) % PAGES.length].id
+        session.cursor = 0
+        return
+      case 'page1':
+      case 'page2':
+      case 'page3':
+        session.page = PAGES[Number(action.slice(4)) - 1].id
+        session.cursor = 0
+        return
+      case 'down': {
+        const items = pageItems(session)
+        session.cursor = Math.min(items.length - 1, session.cursor + 1)
         return
       }
-      openFocusPicker()
-      return
-    }
-    if (key === 'r') {
-      reload(true)
-      return
-    }
-    if (key === '=' || key === '+') {
-      session.filter = session.filter === 'open' ? 'all' : session.filter === 'all' ? 'done' : 'open'
-      session.cursor = 0
-      return
+      case 'up': {
+        const items = pageItems(session)
+        session.cursor = Math.max(0, session.cursor - 1)
+        return
+      }
+      case 'top':
+        session.cursor = 0
+        return
+      case 'bottom':
+        session.cursor = Math.max(0, pageItems(session).length - 1)
+        return
+      case 'toggle':
+        toggleCurrent()
+        return
+      case 'add':
+        mode = 'command'
+        input = session.page === 'habits' ? 'add habit ' : 'add task '
+        inputCursor = input.length
+        return
+      case 'edit': {
+        const item = currentItem()
+        if (item?.kind === 'habit') {
+          mode = 'command'
+          input = `rename habit ${item.habit.title} `
+          inputCursor = input.length
+        } else if (item?.kind === 'task') {
+          mode = 'command'
+          input = `due ${item.task.title} `
+          inputCursor = input.length
+        }
+        return
+      }
+      case 'delete': {
+        const item = currentItem()
+        if (item) {
+          confirmItem = { ...item, title: item.kind === 'habit' ? item.habit.title : item.task.title }
+          mode = 'confirm'
+        }
+        return
+      }
+      case 'focus':
+        if (session.data.timer.endAt) {
+          setMessage(runCommand(session, 'focus stop'))
+          ensureTicker()
+          return
+        }
+        openFocusPicker()
+        return
+      case 'reload':
+        reload(true)
+        return
+      case 'filter':
+        session.filter = session.filter === 'open' ? 'all' : session.filter === 'all' ? 'done' : 'open'
+        session.cursor = 0
+        return
+      default:
+        return
     }
   }
 
@@ -505,25 +552,11 @@ export function startTui({ session, theme, status = () => '' }) {
 
   function handleFocusKey(key) {
     const choices = focusChoices(session)
-    if (key === 'escape' || key === 'q') {
+    const action = lookup.get(key)
+    // 选择器里退出键＝取消（真正退出用 ctrl-c / ctrl-d），和以前的 q 一致。
+    if (key === 'escape' || action === 'quit') {
       mode = 'normal'
       session.message = ''
-      return
-    }
-    if (key === 'j' || key === 'down') {
-      pickCursor = Math.min(choices.length - 1, pickCursor + 1)
-      return
-    }
-    if (key === 'k' || key === 'up') {
-      pickCursor = Math.max(0, pickCursor - 1)
-      return
-    }
-    if (key === 'g' || key === 'home') {
-      pickCursor = 0
-      return
-    }
-    if (key === 'G' || key === 'end') {
-      pickCursor = Math.max(0, choices.length - 1)
       return
     }
     if (key === 'enter' || key === ' ') {
@@ -532,21 +565,29 @@ export function startTui({ session, theme, status = () => '' }) {
       if (choice) startTimer('focus', choice)
       return
     }
+    // 选择器里的移动复用正常模式的键位表，改键位后这里跟着变。
+    if (action === 'down') pickCursor = Math.min(choices.length - 1, pickCursor + 1)
+    else if (action === 'up') pickCursor = Math.max(0, pickCursor - 1)
+    else if (action === 'top' || key === 'home') pickCursor = 0
+    else if (action === 'bottom' || key === 'end') pickCursor = Math.max(0, choices.length - 1)
   }
 
   function handleRestKey(key) {
-    if (key === 'b' || key === 'B' || key === 'enter' || key === '1') {
+    const action = lookup.get(key)
+    if (action === 'quit') {
+      close()
+      return
+    }
+    if (key === 'ctrl-b' || key === 'enter') {
       mode = 'normal'
       startTimer('break')
       return
     }
-    if (key === 'e' || key === 'E' || key === '2' || key === 'escape') {
+    if (key === 'ctrl-e' || key === 'escape') {
       mode = 'normal'
       session.message = '本轮专注已结束，休息一下再看下一件事。'
       session.ok = true
-      return
     }
-    if (key === 'q' || key === 'ctrl-c' || key === 'ctrl-d') close()
   }
 
   function handleToggleKey(key) {
@@ -574,7 +615,7 @@ export function startTui({ session, theme, status = () => '' }) {
 
   function onData(chunk) {
     for (const key of parseKeys(chunk)) {
-      if (key === 'redraw') {
+      if (key === 'ctrl-l') {
         paint()
         continue
       }

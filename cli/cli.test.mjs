@@ -7,6 +7,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { normalizeAppData, todayKey } from '../src/core.mjs'
 import { createSession, parseDays, parsePriority, runCommand, tokenize } from './commands.mjs'
+import { DEFAULT_BINDINGS, buildLookup, loadBindings, normalizeKeyName } from './keys.mjs'
 import { startServer } from './server.mjs'
 import { createStore } from './store.mjs'
 import { createTheme, width } from './theme.mjs'
@@ -298,7 +299,7 @@ describe('交互界面', () => {
 
     const { writes, send, finished, size } = await mountTui(session)
 
-    await send(' ')
+    await send('\u0014') // ctrl-t 切换光标项
     expect(session.data.habits[0].logs).toEqual([todayKey()])
     await send('2')
     expect(session.page).toBe('habits')
@@ -306,15 +307,17 @@ describe('交互界面', () => {
     expect(session.page).toBe('tasks')
     size.columns = 60
     size.rows = 18
-    await send('\u000c')
-    await send(':add task 从命令添加\r')
+    await send('\u000c') // ctrl-l 重绘
+    await send('\u0010add task 从命令添加\r') // ctrl-p 打开命令行
     expect(session.data.tasks.map((task) => task.title)).toContain('从命令添加')
-    await send('?')
+    await send('\u0007') // ctrl-g 帮助
     await send('j')
-    await send('q')
+    await send('\u0011') // ctrl-q 退出
     await finished
 
     expect(writes.join('')).toContain('日常')
+    expect(writes.join('')).toContain('ctrl-p 命令')
+    expect(writes.join('')).toContain('j/k 移动')
     expect(writes.join('')).toContain('\u001b[?1049l')
   })
 
@@ -325,7 +328,7 @@ describe('交互界面', () => {
 
     const { writes, send, finished } = await mountTui(session)
 
-    await send(' ')
+    await send('\u0014') // ctrl-t 切换完成状态前先确认
     expect(writes.join('')).toContain('确认完成「整理笔记」')
     expect(session.data.tasks[0].done).toBe(false)
 
@@ -333,13 +336,13 @@ describe('交互界面', () => {
     await send('n')
     expect(session.data.tasks[0].done).toBe(false)
 
-    await send(' ')
+    await send('\u0014')
     await send('y')
     expect(session.data.tasks[0].done).toBe(true)
     // 完成的待办仍然留在列表里。
     expect(pageItems(session).map((item) => item.task.title)).toEqual(['整理笔记'])
 
-    await send('q')
+    await send('\u0011')
     await finished
   })
 
@@ -351,8 +354,8 @@ describe('交互界面', () => {
 
     const { writes, send, finished } = await mountTui(session)
 
-    // f 打开专注目标选择器：自由专注 → 习惯 → 未完成待办。
-    await send('f')
+    // ctrl-f 打开专注目标选择器：自由专注 → 习惯 → 未完成待办。
+    await send('\u0006')
     expect(writes.join('')).toContain('选择专注目标')
     await send('j')
     await send('\r')
@@ -365,27 +368,104 @@ describe('交互界面', () => {
 
     const text = writes.join('')
     expect(text).toContain('专注完成')
-    expect(text).toContain('b 休息')
-    expect(text).toContain('e 结束本轮')
+    expect(text).toContain('ctrl-b 休息')
+    expect(text).toContain('ctrl-e 结束本轮')
     // 时间到时发出提示音（终端响铃）。
     expect(text).toContain('\u0007')
     expect(session.data.sessions).toHaveLength(1)
 
-    // 结束后不自动进入休息，按 b 才休息。
+    // 结束后不自动进入休息，按 ctrl-b 才休息。
     expect(session.data.timer.endAt).toBeNull()
-    await send('b')
+    await send('\u0002')
     expect(session.data.timer.mode).toBe('break')
     expect(session.data.timer.endAt).toBeGreaterThan(Date.now())
 
     // 选「结束」时停在空闲状态，也不再自动进入休息。
     session.save({ ...session.data, timer: { mode: 'focus', endAt: Date.now() - 1 } })
     await new Promise((resolve) => setTimeout(resolve, 1400))
-    await send('e')
+    await send('\u0005')
     expect(session.data.timer.endAt).toBeNull()
     expect(session.data.timer.mode).toBe('focus')
     expect(session.data.sessions).toHaveLength(2)
 
-    await send('q')
+    await send('\u0011')
     await finished
+  })
+
+  it('TUI 里改键位后立即生效', async () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add task 整理笔记')
+    session.page = 'tasks'
+
+    const { send, finished } = await mountTui(session)
+
+    // ctrl-p 打开命令行，把退出改到 ctrl-w。
+    await send('\u0010key quit ctrl-w\r')
+    expect(loadBindings(session.store.file).quit).toEqual(['ctrl-w'])
+    await send('\u0017') // ctrl-w 现在就是退出
+    await finished
+  })
+})
+
+describe('键位', () => {
+  it('默认把快捷指令绑到组合键，光标移动保留 j/k 与方向键', () => {
+    expect(DEFAULT_BINDINGS.quit).toEqual(['ctrl-q'])
+    expect(DEFAULT_BINDINGS.help).toEqual(['ctrl-g'])
+    expect(DEFAULT_BINDINGS.command).toEqual(['ctrl-p'])
+    expect(DEFAULT_BINDINGS.toggle).toEqual(['ctrl-t'])
+    expect(DEFAULT_BINDINGS.add).toEqual(['ctrl-a'])
+    expect(DEFAULT_BINDINGS.edit).toEqual(['ctrl-e'])
+    expect(DEFAULT_BINDINGS.delete).toEqual(['ctrl-x'])
+    expect(DEFAULT_BINDINGS.focus).toEqual(['ctrl-f'])
+    expect(DEFAULT_BINDINGS.filter).toEqual(['ctrl-o'])
+    expect(DEFAULT_BINDINGS.down).toEqual(['j', 'down'])
+    expect(DEFAULT_BINDINGS.up).toEqual(['k', 'up'])
+    // 保留键不占任何动作。
+    const lookup = buildLookup(DEFAULT_BINDINGS)
+    expect(lookup.get('ctrl-c')).toBeUndefined()
+    expect(lookup.get('ctrl-d')).toBeUndefined()
+    expect(lookup.get('ctrl-l')).toBeUndefined()
+    expect(lookup.get('ctrl-q')).toBe('quit')
+    expect(lookup.get('j')).toBe('down')
+  })
+
+  it('key 命令可以查看、修改、恢复键位并持久化', () => {
+    const store = emptyStore()
+    const session = createSession(store)
+
+    // 不带参数展开帮助（快捷键表在帮助里）。
+    expect(runCommand(session, 'key').help).toBe(true)
+    expect(runCommand(session, 'key quit').message).toContain('ctrl-q')
+
+    const bound = runCommand(session, 'key quit ctrl-w')
+    expect(bound.ok).toBe(true)
+    expect(bound.bindings.quit).toEqual(['ctrl-w'])
+    // 重新读取文件后仍然生效。
+    expect(loadBindings(store.file).quit).toEqual(['ctrl-w'])
+
+    // 已被占用的键、保留键、无法识别的键、不存在的动作都要拒绝。
+    const conflict = runCommand(session, 'key help ctrl-w')
+    expect(conflict.ok).toBe(false)
+    expect(conflict.message).toContain('已绑定给 quit')
+    expect(runCommand(session, 'key quit ctrl-c').message).toContain('保留按键')
+    expect(runCommand(session, 'key quit ctrl-1').ok).toBe(false)
+    expect(runCommand(session, 'key quit 随便按').ok).toBe(false)
+    expect(runCommand(session, 'key 不存在 ctrl-w').ok).toBe(false)
+    // 拒绝后键位不被改动。
+    expect(loadBindings(store.file).quit).toEqual(['ctrl-w'])
+
+    // 命名键与大小写：G 和 g 是两个不同的键。
+    expect(normalizeKeyName('Ctrl+Q')).toBe('ctrl-q')
+    expect(normalizeKeyName('space')).toBe(' ')
+    expect(normalizeKeyName('esc')).toBe('escape')
+    expect(normalizeKeyName('G')).toBe('G')
+    expect(runCommand(session, 'key bottom space').bindings.bottom).toEqual([' '])
+
+    // 单个动作恢复默认与全部重置。
+    runCommand(session, 'key bottom -')
+    expect(loadBindings(store.file).bottom).toEqual(['G'])
+    runCommand(session, 'key reset')
+    expect(loadBindings(store.file).quit).toEqual(['ctrl-q'])
+    expect(loadBindings(store.file).filter).toEqual(['ctrl-o'])
   })
 })
