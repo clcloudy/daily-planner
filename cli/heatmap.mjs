@@ -12,6 +12,15 @@ export const HEAT_THRESHOLDS = [25, 50, 100]
 const BLOCKS = ['·', '░', '▒', '▓', '█']
 const HEAT_CODES = [238, 22, 28, 34, 71]
 export const HEAT_MAX_WEEKS = 53
+/** 一个格子占 2 列：方块 + 间隔，避免相邻方块连成一片。 */
+export const HEAT_CELL_WIDTH = 2
+/** 今日页内嵌热力图的最小内容宽度，太窄就不挤进去。 */
+export const HEATMAP_EMBED_MIN_WIDTH = 46
+
+/** 给定内容宽度能放下的周数（每 2 列一周）。 */
+export function visibleWeeks(contentWidth, labelWidth = 2) {
+  return Math.max(1, Math.min(HEAT_MAX_WEEKS, Math.floor((contentWidth - labelWidth) / HEAT_CELL_WIDTH)))
+}
 
 /** 按本地日期汇总专注分钟，只保留正数，坏数据直接跳过。 */
 export function focusMinutesByDay(sessions = []) {
@@ -79,16 +88,16 @@ export function buildHeatmap(now = new Date(), sessions = [], options = {}) {
   return { columns, weeks, start, end: today, total, activeDays, best }
 }
 
-/** 每月第一周上方标注月份；用单字符网格排布，保证与格子逐列对齐。 */
+/** 每月第一周上方标注月份；按格子的 2 列宽度排布，保证与方块逐列对齐。 */
 export function monthLabels(columns) {
-  const cells = Array(columns.length).fill(' ')
+  const cells = Array(columns.length * HEAT_CELL_WIDTH).fill(' ')
   let previous = ''
   for (let week = 0; week < columns.length; week += 1) {
     const first = columns[week][0]
     const month = String(Number(first.date.slice(5, 7)))
     if (month === previous) continue
     previous = month
-    let cursor = week
+    let cursor = week * HEAT_CELL_WIDTH
     for (const char of month) {
       if (cursor < cells.length && cells[cursor] === ' ') cells[cursor] = char
       cursor += 1
@@ -100,26 +109,30 @@ export function monthLabels(columns) {
 export function renderHeatmap(state, theme, options = {}) {
   const contentWidth = options.width ?? 80
   const labelWidth = 2
-  const weeks = Math.max(1, Math.min(HEAT_MAX_WEEKS, contentWidth - labelWidth))
+  const weeks = options.weeks ?? visibleWeeks(contentWidth, labelWidth)
   const grid = buildHeatmap(state.now ?? new Date(), state.data?.sessions ?? [], { weeks })
   const endDate = dayKey(grid.end)
-  const title = `${theme.bold('年度专注热力图')} ${theme.faint(`过去 ${grid.weeks} 周 · 截至 ${endDate}`)}`
+  const heading = options.compact ? '专注热力图' : '年度专注热力图'
+  const title = `${theme.bold(heading)} ${theme.faint(`过去 ${grid.weeks} 周 · 截至 ${endDate}`)}`
 
   const lines = [truncate(title, contentWidth)]
   lines.push(theme.faint(`${' '.repeat(labelWidth)}${monthLabels(grid.columns)}`))
   for (let day = 0; day < 7; day += 1) {
-    const cells = grid.columns.map((column) => (column[day].future ? ' ' : shade(theme, column[day].level))).join('')
+    const cells = grid.columns
+      .map((column) => (column[day].future ? ' '.repeat(HEAT_CELL_WIDTH) : `${shade(theme, column[day].level)} `))
+      .join('')
+      .replace(/\s+$/, '')
     lines.push(`${theme.faint(`${WEEKDAYS[day]} `)}${cells}`)
   }
   lines.push('')
   const legend = [
-    `${theme.faint('少')} ${[0, 1, 2, 3, 4].map((level) => shade(theme, level)).join('')} ${theme.faint('多')}`,
+    `${theme.faint('少')} ${[0, 1, 2, 3, 4].map((level) => shade(theme, level)).join(' ')} ${theme.faint('多')}`,
     `${theme.muted('累计')} ${theme.bold(formatFocus(grid.total))}`,
     `${theme.muted('专注')} ${theme.bold(`${grid.activeDays} 天`)}`,
     `${theme.muted('单日最多')} ${theme.bold(formatFocus(grid.best))}`,
   ].join('   ')
   lines.push(truncate(legend, contentWidth))
-  lines.push(truncate(theme.faint('每格代表一天 · 横轴为周、纵轴为星期几 · 颜色越深当天专注越久'), contentWidth))
+  if (!options.compact) lines.push(truncate(theme.faint('每格代表一天 · 横轴为周、纵轴为星期几 · 颜色越深当天专注越久'), contentWidth))
   return lines
 }
 

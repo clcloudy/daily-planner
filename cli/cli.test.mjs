@@ -221,7 +221,8 @@ describe('专注热力图', () => {
     expect(grid.columns[2][0].future).toBe(false)
     // 今天之后的星期留空，不参与统计。
     expect(grid.columns[2][1].future).toBe(true)
-    expect(monthLabels(grid.columns)).toHaveLength(3)
+    // 月份标签按每格 2 列排布，与方块逐列对齐。
+    expect(width(monthLabels(grid.columns))).toBe(3 * 2)
   })
 
   it('渲染结果不超出给定宽度并给出汇总', () => {
@@ -238,6 +239,15 @@ describe('专注热力图', () => {
     expect(lines[0]).toContain('年度专注热力图')
     expect(lines.join('\n')).toContain('累计')
     expect(lines.join('\n')).toContain('30m')
+  })
+
+  it('今日页在空间足够时内嵌热力图，空间不足时省略', () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add habit 晨间阅读 --days 每天')
+    const roomy = renderBody(session, { theme, width: 100, height: 60, selected: -1 })
+    expect(roomy.join('\n')).toContain('专注热力图')
+    const tight = renderBody(session, { theme, width: 100, height: 12, selected: -1 })
+    expect(tight.join('\n')).not.toContain('专注热力图')
   })
 })
 

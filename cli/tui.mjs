@@ -206,7 +206,7 @@ export function startTui({ session, theme, status = () => '' }) {
   function buildBody(contentWidth, contentHeight) {
     const items = pageItems(session)
     if (session.cursor >= items.length) session.cursor = Math.max(0, items.length - 1)
-    const body = renderBody(session, { theme, width: contentWidth, selected: session.cursor, keys: bindings })
+    const body = renderBody(session, { theme, width: contentWidth, height: contentHeight, selected: session.cursor, keys: bindings })
     return body.slice(0, contentHeight)
   }
 

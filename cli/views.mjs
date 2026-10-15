@@ -11,7 +11,7 @@ import {
   weekDates,
 } from '../src/core.mjs'
 import { DEFAULT_BINDINGS, keyLabel } from './keys.mjs'
-import { renderHeatmap } from './heatmap.mjs'
+import { HEATMAP_EMBED_MIN_WIDTH, renderHeatmap } from './heatmap.mjs'
 import { pluginEnabled } from './plugins.mjs'
 import { pad, padStart, truncate, width } from './theme.mjs'
 
@@ -190,6 +190,14 @@ function todayBody(state, options) {
     lines.push(...sideBySide([...habitLines, '', ...taskLines], focusLines, leftWidth))
   } else {
     lines.push(...habitLines, '', ...taskLines, '', ...focusLines)
+  }
+
+  // 空间够大时把热力图直接铺在今日页底部，避免大终端上大片留白。
+  if (pluginEnabled(state.plugins, 'heatmap') && contentWidth >= HEATMAP_EMBED_MIN_WIDTH) {
+    const heat = renderHeatmap(state, theme, { width: contentWidth, compact: true })
+    const block = ['', rule(contentWidth, theme), ...heat]
+    const available = options.height ?? Number.POSITIVE_INFINITY
+    if (lines.length + block.length <= available) lines.push(...block)
   }
   return lines
 }
