@@ -133,7 +133,7 @@ function findNode(data, key) {
   return prefix.length === 1 ? prefix[0] : null
 }
 
-export function helpLines(theme, bindings = DEFAULT_BINDINGS) {
+export function helpLines(theme, bindings = DEFAULT_BINDINGS, options = {}) {
   const head = (text) => theme.bold(text)
   const cmd = (text, description) => `  ${theme.green(pad(text, 32))}${theme.muted(description)}`
   // 快捷键列放宽到 36：四个 ctrl 组合键并排也不挤掉说明文字。
@@ -172,6 +172,7 @@ export function helpLines(theme, bindings = DEFAULT_BINDINGS) {
     '',
     head('插件'),
     cmd('plugin [名称] [on|off]', '查看 / 开关插件，如 plugin heatmap off'),
+    ...(options.daemon ? ['', head('后台服务'), cmd('daemon start|stop|status', '让同步服务脱离终端常驻 / 停止 / 查看状态')] : []),
     '',
     head('快捷键'),
     key(`${keyHint(bindings, 'page1')} / ${keyHint(bindings, 'page2')} / ${keyHint(bindings, 'page3')} · ${keyHint(bindings, 'next-page')}`, '切换页面'),

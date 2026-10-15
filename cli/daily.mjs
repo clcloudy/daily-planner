@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dateLabel, greeting } from '../src/core.mjs'
 import { createSession, helpLines, runCommand } from './commands.mjs'
+import { daemonStatus, serviceFiles, startDaemon, stopDaemon } from './daemon.mjs'
 import { DEFAULT_BINDINGS, loadBindings } from './keys.mjs'
 import { DIST_DIR, probeServer, resolveServer, startServer } from './server.mjs'
 import { createStore, defaultDataFile } from './store.mjs'
@@ -17,6 +18,7 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const TUI_COMMANDS = new Set(['ui', 'tui', 'start'])
 const SERVE_COMMANDS = new Set(['serve', 'server'])
 const WEB_COMMANDS = new Set(['web', 'open'])
+const DAEMON_COMMANDS = new Set(['daemon', 'service', 'background'])
 
 function parseArgv(argv) {
   const options = { color: undefined, data: null, port: Number(process.env.DAILY_PLANNER_PORT) || 8787, server: true, open: false }
@@ -51,11 +53,12 @@ function printPage(session, theme, page, bindings = DEFAULT_BINDINGS) {
   process.stdout.write(`${lines.join('\n').replace(/\s+$/, '')}\n`)
 }
 
-function printInfo(theme, session, serverInfo) {
+function printInfo(theme, session, serverInfo, daemon) {
   const rows = [
     ['数据文件', session.file],
     ['文件状态', session.exists ? `存在 · 修订 ${session.revision}` : '尚未创建，执行任意写操作后自动创建'],
     ['同步服务', serverInfo ? serverInfo.url : '未启动（用 daily serve 或直接运行 daily）'],
+    ['后台服务', daemon?.running ? `运行中 · pid ${daemon.record.pid} · 端口 ${daemon.health?.port ?? daemon.record.port}` : '未运行（node cli/daily.mjs daemon start）'],
     ['网页版', fs.existsSync(path.join(DIST_DIR, 'index.html')) ? '已构建，可由同步服务直接打开' : '未构建，请先执行 npm run build'],
     ['习惯 / 待办', `${session.data.habits.length} 个习惯 · ${session.data.tasks.length} 条待办`],
     ['长期规划', `${session.data.nodes.length} 个节点 · ${session.data.edges.length} 条连接（只在网页版编辑）`],
@@ -91,7 +94,7 @@ async function main() {
   if (verb === 'help') {
     process.stdout.write(`${theme.bold('日常 daily')} ${theme.faint(VERSION)} · 命令行版\n\n`)
     process.stdout.write(`${theme.muted('用法：daily [页面|命令] [参数] · 不带参数进入交互界面')}\n\n`)
-    process.stdout.write(`${helpLines(theme, bindings).join('\n')}\n`)
+    process.stdout.write(`${helpLines(theme, bindings, { daemon: true }).join('\n')}\n`)
     return
   }
 
@@ -134,6 +137,45 @@ async function main() {
     return
   }
 
+  if (DAEMON_COMMANDS.has(verb)) {
+    const action = (rest[1] ?? 'status').toLowerCase()
+    if (action === 'start' || action === 'on' || action === 'up') {
+      const result = await startDaemon({ dataFile: store.file, port: options.port })
+      if (result.alreadyRunning) {
+        process.stdout.write(`${theme.bold('后台服务')} ${theme.yellow('已在运行')} ${theme.faint(`pid ${result.status.record.pid} · 日志 ${serviceFiles(store.file).logFile}`)}\n`)
+      } else if (result.started) {
+        process.stdout.write(`${theme.bold('后台服务')} ${theme.green('已启动')} ${theme.faint(`pid ${result.pid}`)}\n`)
+        process.stdout.write(`  ${theme.muted('地址')} http://127.0.0.1:${result.port}/\n`)
+        process.stdout.write(`  ${theme.muted('数据文件')} ${store.file}\n`)
+        process.stdout.write(`  ${theme.muted('日志')} ${result.logFile}\n`)
+        process.stdout.write(`  ${theme.faint('停止：node cli/daily.mjs daemon stop')}\n`)
+      } else {
+        process.stderr.write(`${theme.red(result.message ?? '后台服务启动失败。')}\n`)
+        process.exitCode = 1
+      }
+      return
+    }
+    if (action === 'stop' || action === 'off' || action === 'down') {
+      const result = await stopDaemon(store.file)
+      if (result.stopped) process.stdout.write(`${theme.green('后台服务已停止。')}\n`)
+      else process.stdout.write(`${theme.yellow('没有在运行的后台服务。')}\n`)
+      return
+    }
+    const status = await daemonStatus(store.file)
+    if (status.running) {
+      const port = status.health?.port ?? status.record.port
+      process.stdout.write(`${theme.bold('后台服务')} ${theme.green('运行中')} ${theme.faint(`pid ${status.record.pid}`)}\n`)
+      process.stdout.write(`  ${theme.muted('地址')} http://127.0.0.1:${port}/\n`)
+      process.stdout.write(`  ${theme.muted('数据文件')} ${store.file}\n`)
+      process.stdout.write(`  ${theme.muted('日志')} ${serviceFiles(store.file).logFile}\n`)
+    } else {
+      const note = status.stale ? '已停止（清理了残留状态）' : '未运行'
+      process.stdout.write(`${theme.bold('后台服务')} ${theme.faint(note)}\n`)
+      process.stdout.write(`  ${theme.faint(`启动：node cli/daily.mjs daemon start · 日志 ${serviceFiles(store.file).logFile}`)}\n`)
+    }
+    return
+  }
+
   if (verb === 'where' || verb === 'info' || verb === 'status') {
     let serverInfo = null
     for (let index = 0; index < 10; index += 1) {
@@ -143,7 +185,7 @@ async function main() {
         break
       }
     }
-    printInfo(theme, session, serverInfo)
+    printInfo(theme, session, serverInfo, await daemonStatus(store.file))
     return
   }
 
@@ -191,7 +233,7 @@ async function main() {
   const line = rest.join(' ')
   const result = runCommand(session, line)
   if (result.help) {
-    process.stdout.write(`${helpLines(theme, result.bindings ?? bindings).join('\n')}\n`)
+    process.stdout.write(`${helpLines(theme, result.bindings ?? bindings, { daemon: true }).join('\n')}\n`)
     return
   }
   if (!result.ok) {

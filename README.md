@@ -36,6 +36,8 @@ Windows 上双击 `启动日常命令行.bat`。不需要 `npm install`，只需
 
 命令行界面用 `ctrl-p` 输入命令，`ctrl-g` 查看帮助，`ctrl-n` 打开专注热力图（用 `plugin heatmap off` 可关闭这个插件）；快捷键都是组合键，可以用 `key` 命令改键位。完整命令表见 [`docs/CLI.md`](docs/CLI.md)。
 
+想让同步服务关掉终端后也一直跑，可以用 `node cli/daily.mjs daemon start`（`daemon status` / `daemon stop` 管理），或双击 `后台运行日常.bat`。
+
 ## 数据
 
 - 数据文件：`~/.daily-planner/data.json`（可用 `--data` 或 `DAILY_PLANNER_DATA` 指定）。

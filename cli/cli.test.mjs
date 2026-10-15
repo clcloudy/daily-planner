@@ -9,6 +9,7 @@ import { normalizeAppData, todayKey } from '../src/core.mjs'
 import { createSession, parseDays, parsePriority, runCommand, tokenize } from './commands.mjs'
 import { DEFAULT_BINDINGS, buildLookup, loadBindings, normalizeKeyName } from './keys.mjs'
 import { startServer } from './server.mjs'
+import { daemonStatus, serviceFiles, startDaemon, stopDaemon } from './daemon.mjs'
 import { buildHeatmap, focusMinutesByDay, heatLevel, monthLabels, renderHeatmap } from './heatmap.mjs'
 import { defaultPlugins, loadPlugins, pluginEnabled, savePlugins } from './plugins.mjs'
 import { createStore } from './store.mjs'
@@ -283,6 +284,37 @@ describe('插件开关', () => {
     expect(runCommand(session, 'heatmap').ok).toBe(true)
     expect(runCommand(session, 'plugin 不存在').ok).toBe(false)
   })
+})
+
+describe('后台常驻服务', () => {
+  it('start 脱离终端启动，status 能发现，stop 能停掉', async () => {
+    const store = emptyStore()
+    const port = 20000 + (process.pid % 20000)
+    try {
+      const started = await startDaemon({ dataFile: store.file, port })
+      expect(started.started).toBe(true)
+      expect(started.pid).toBeGreaterThan(0)
+      expect(fs.existsSync(serviceFiles(store.file).stateFile)).toBe(true)
+
+      const status = await daemonStatus(store.file)
+      expect(status.running).toBe(true)
+      expect(status.record.pid).toBe(started.pid)
+      expect(status.health?.port).toBe(started.port)
+
+      const again = await startDaemon({ dataFile: store.file, port })
+      expect(again.alreadyRunning).toBe(true)
+      expect(again.started).toBe(false)
+
+      const stopped = await stopDaemon(store.file)
+      expect(stopped.stopped).toBe(true)
+      expect((await daemonStatus(store.file)).running).toBe(false)
+      expect(fs.existsSync(serviceFiles(store.file).stateFile)).toBe(false)
+      // 已经停掉后再 stop 只是提示，不报错。
+      expect((await stopDaemon(store.file)).stopped).toBe(false)
+    } finally {
+      await stopDaemon(store.file)
+    }
+  }, 30000)
 })
 
 describe('本地同步服务', () => {

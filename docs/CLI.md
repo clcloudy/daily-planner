@@ -23,6 +23,22 @@ Windows 上双击 `启动日常命令行.bat` 也可以。不需要 `npm install
 | `--data <路径>` | 使用指定的数据文件，默认 `~/.daily-planner/data.json` |
 | `--no-color` | 关闭颜色输出（`NO_COLOR` 环境变量等效） |
 
+## 后台常驻
+
+如果希望同步服务在关掉终端后继续运行（浏览器、网页版随时能连上同一份数据），可以让它脱离终端常驻：
+
+```bash
+node cli/daily.mjs daemon start     # 后台启动同步服务
+node cli/daily.mjs daemon status    # 查看 pid / 端口 / 日志
+node cli/daily.mjs daemon stop      # 停止
+```
+
+- 后台进程就是脱离终端的 `daily serve`，数据读写、SSE 推送和前台运行完全一致，端口默认 8787，被占用时自动往后找。
+- 状态写在数据文件同目录的 `daily.service.json`，日志写 `daily.service.log`；`daemon status` 也会清理进程已经不在的残留状态。
+- 后台服务已在运行时，直接运行 `node cli/daily.mjs`（TUI）会复用它，不会重复起服务；退出 TUI 也不会把后台服务关掉。
+- 用 `node cli/daily.mjs where` / `info` / `status` 能一眼看到后台服务是否在运行；开机自启可以把 `node cli/daily.mjs daemon start` 放进 Windows 启动项（`shell:startup`）或任务计划程序，也可以双击仓库里的 `后台运行日常.bat`。
+- 注意：后台服务只负责同步；番茄钟到点写入 `sessions` 仍由打开着的 TUI 或网页版完成，所以想看专注统计时记得留一个界面开着（或让浏览器标签页保持打开）。
+
 ## 交互快捷键
 
 快捷指令默认全部是 **ctrl 组合键**（避免误触，也给以后的文字输入留出单键）；光标移动保留 `j` `k` 与方向键。
