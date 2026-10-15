@@ -44,6 +44,7 @@ export const ACTIONS = [
   { id: 'focus', label: '专注', keys: ['ctrl-f'] },
   { id: 'reload', label: '重新读取数据', keys: ['ctrl-r'] },
   { id: 'filter', label: '切换待办筛选', keys: ['ctrl-o'] },
+  { id: 'heatmap', label: '专注热力图', keys: ['ctrl-n'] },
   { id: 'down', label: '下一项', keys: ['j', 'down'] },
   { id: 'up', label: '上一项', keys: ['k', 'up'] },
   { id: 'top', label: '第一项', keys: ['g'] },

@@ -11,6 +11,8 @@ import {
   weekDates,
 } from '../src/core.mjs'
 import { DEFAULT_BINDINGS, keyLabel } from './keys.mjs'
+import { renderHeatmap } from './heatmap.mjs'
+import { pluginEnabled } from './plugins.mjs'
 import { pad, padStart, truncate, width } from './theme.mjs'
 
 export const PAGES = [
@@ -18,6 +20,15 @@ export const PAGES = [
   { id: 'habits', label: '习惯' },
   { id: 'tasks', label: '待办' },
 ]
+
+export const HEATMAP_PAGE = { id: 'heatmap', label: '热力' }
+
+/** 当前启用的页面：插件关闭时热力图页不从标签栏出现，也不能通过翻页到达。 */
+export function activePages(state) {
+  const pages = [...PAGES]
+  if (pluginEnabled(state?.plugins, 'heatmap')) pages.push(HEATMAP_PAGE)
+  return pages
+}
 
 export const TODAY_TASK_LIMIT = 8
 export const TODAY_DONE_LIMIT = 3
@@ -47,6 +58,7 @@ export function todayTasks(data, limit = TODAY_TASK_LIMIT, doneLimit = TODAY_DON
 /** 当前页面里可以上下移动、用空格操作的项目。 */
 export function pageItems(state) {
   const summary = summarize(state.data, state.now)
+  if (state.page === 'heatmap') return []
   if (state.page === 'habits') return state.data.habits.map((habit) => ({ kind: 'habit', id: habit.id, habit }))
   if (state.page === 'tasks') {
     return filterTasks(state.data, state.filter).map((task) => ({ kind: 'task', id: task.id, task }))
@@ -325,6 +337,7 @@ export function renderFocusPicker(state, theme, options = {}) {
 export function renderBody(state, options) {
   const page = state.page ?? 'today'
   const merged = { width: 80, selected: state.cursor ?? -1, keys: DEFAULT_BINDINGS, ...options }
+  if (page === 'heatmap') return renderHeatmap(state, merged.theme, merged)
   if (page === 'habits') return habitsBody(state, merged)
   if (page === 'tasks') return tasksBody(state, merged)
   return todayBody(state, merged)
@@ -340,7 +353,9 @@ export function renderHeader(state, theme, options = {}) {
 
 export function renderTabs(state, theme) {
   const active = state.page ?? 'today'
-  return PAGES.map((page) => (page.id === active ? theme.green(page.label) : theme.faint(page.label))).join(theme.sep('  ·  '))
+  return activePages(state)
+    .map((page) => (page.id === active ? theme.green(page.label) : theme.faint(page.label)))
+    .join(theme.sep('  ·  '))
 }
 
 export { clock, progressBar, rule, sideBySide, taskLine, habitLine, filterLabel, WEEKDAYS }

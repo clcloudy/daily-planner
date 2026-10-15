@@ -9,6 +9,8 @@ import { normalizeAppData, todayKey } from '../src/core.mjs'
 import { createSession, parseDays, parsePriority, runCommand, tokenize } from './commands.mjs'
 import { DEFAULT_BINDINGS, buildLookup, loadBindings, normalizeKeyName } from './keys.mjs'
 import { startServer } from './server.mjs'
+import { buildHeatmap, focusMinutesByDay, heatLevel, monthLabels, renderHeatmap } from './heatmap.mjs'
+import { defaultPlugins, loadPlugins, pluginEnabled, savePlugins } from './plugins.mjs'
 import { createStore } from './store.mjs'
 import { createTheme, width } from './theme.mjs'
 import { pageItems, renderBody } from './views.mjs'
@@ -189,6 +191,87 @@ describe('页面渲染', () => {
     expect(runCommand(session, 'focus start 整理笔记').ok).toBe(true)
     expect(session.data.timer.taskId).toBe(session.data.tasks[0].id)
     expect(runCommand(session, 'focus start 不存在的目标').ok).toBe(false)
+  })
+})
+
+describe('专注热力图', () => {
+  it('按本地日期汇总专注分钟并换算色阶', () => {
+    const byDay = focusMinutesByDay([
+      { id: 's1', date: '2025-01-01', minutes: 25 },
+      { id: 's2', date: '2025-01-01', minutes: 30 },
+      { id: 's3', date: '2025-01-02', minutes: 100 },
+      { id: 's4', date: '2025-01-03', minutes: 0 },
+      { id: 's5', date: '', minutes: 50 },
+    ])
+    expect(byDay.get('2025-01-01')).toBe(55)
+    expect(byDay.has('2025-01-03')).toBe(false)
+    expect(heatLevel(0)).toBe(0)
+    expect(heatLevel(10)).toBe(1)
+    expect(heatLevel(25)).toBe(2)
+    expect(heatLevel(60)).toBe(3)
+    expect(heatLevel(200)).toBe(4)
+  })
+
+  it('网格横轴为周、纵轴为星期，最后一列是本日所在周', () => {
+    const now = new Date('2025-10-12T09:00:00') // 周日
+    const grid = buildHeatmap(now, [], { weeks: 3 })
+    expect(grid.columns).toHaveLength(3)
+    expect(grid.columns.every((column) => column.length === 7)).toBe(true)
+    expect(grid.columns[2][0].date).toBe('2025-10-12')
+    expect(grid.columns[2][0].future).toBe(false)
+    // 今天之后的星期留空，不参与统计。
+    expect(grid.columns[2][1].future).toBe(true)
+    expect(monthLabels(grid.columns)).toHaveLength(3)
+  })
+
+  it('渲染结果不超出给定宽度并给出汇总', () => {
+    const session = createSession(emptyStore())
+    session.save({
+      ...session.data,
+      sessions: [
+        { id: 's1', date: todayKey(), minutes: 10 },
+        { id: 's2', date: todayKey(), minutes: 20 },
+      ],
+    })
+    const lines = renderHeatmap(session, theme, { width: 80 })
+    expect(lines.every((line) => width(line) <= 80)).toBe(true)
+    expect(lines[0]).toContain('年度专注热力图')
+    expect(lines.join('\n')).toContain('累计')
+    expect(lines.join('\n')).toContain('30m')
+  })
+})
+
+describe('插件开关', () => {
+  it('默认状态可读取，配置文件只存与默认的差异', () => {
+    const store = emptyStore()
+    expect(defaultPlugins().heatmap).toBe(true)
+    expect(pluginEnabled(loadPlugins(store.file), 'heatmap')).toBe(true)
+
+    savePlugins(store.file, { heatmap: false })
+    const saved = JSON.parse(fs.readFileSync(path.join(path.dirname(store.file), 'plugins.json'), 'utf8'))
+    expect(saved.plugins).toEqual({ heatmap: false })
+    expect(pluginEnabled(loadPlugins(store.file), 'heatmap')).toBe(false)
+
+    savePlugins(store.file, { heatmap: true })
+    const restored = JSON.parse(fs.readFileSync(path.join(path.dirname(store.file), 'plugins.json'), 'utf8'))
+    expect(restored.plugins).toEqual({})
+  })
+
+  it('plugin 命令开关插件并控制热力图页面', () => {
+    const store = emptyStore()
+    const session = createSession(store)
+    expect(runCommand(session, 'heatmap').page).toBe('heatmap')
+
+    expect(runCommand(session, 'plugin heatmap off').ok).toBe(true)
+    expect(pluginEnabled(loadPlugins(store.file), 'heatmap')).toBe(false)
+    expect(session.plugins.heatmap).toBe(false)
+    // 关掉插件后退回今日，直接跳转会失败。
+    expect(session.page).toBe('today')
+    expect(runCommand(session, 'heatmap').ok).toBe(false)
+
+    expect(runCommand(session, 'plugin heatmap on').ok).toBe(true)
+    expect(runCommand(session, 'heatmap').ok).toBe(true)
+    expect(runCommand(session, 'plugin 不存在').ok).toBe(false)
   })
 })
 
@@ -403,6 +486,26 @@ describe('交互界面', () => {
     await send('\u0010key quit ctrl-w\r')
     expect(loadBindings(session.store.file).quit).toEqual(['ctrl-w'])
     await send('\u0017') // ctrl-w 现在就是退出
+    await finished
+  })
+
+  it('热力图作为插件页面可以开关', async () => {
+    const session = createSession(emptyStore())
+    runCommand(session, 'add habit 晨间阅读 --days 每天')
+
+    const { writes, send, finished } = await mountTui(session)
+
+    await send('\u000e') // ctrl-n 打开热力图
+    expect(session.page).toBe('heatmap')
+    expect(writes.join('')).toContain('年度专注热力图')
+
+    await send('\u0010plugin heatmap off\r') // ctrl-p 关掉插件
+    expect(session.plugins.heatmap).toBe(false)
+    expect(session.page).toBe('today')
+    await send('\u000e')
+    expect(writes.join('')).toContain('专注热力图插件已关闭')
+
+    await send('\u0011')
     await finished
   })
 })

@@ -12,6 +12,7 @@ import {
   todayKey,
 } from '../src/core.mjs'
 import { ACTIONS, DEFAULT_BINDINGS, RESERVED_KEYS, keyHint, loadBindings, normalizeKeyName, saveBindings } from './keys.mjs'
+import { PLUGINS, findPlugin, loadPlugins, pluginEnabled, savePlugins } from './plugins.mjs'
 import { pageItems, resolveHabit, resolveTask } from './views.mjs'
 import { pad } from './theme.mjs'
 
@@ -29,6 +30,7 @@ export function createSession(store, options = {}) {
     cursor: 0,
     // 待办默认显示全部：完成的项要留在列表里灰色显示，而不是凭空消失。
     filter: options.filter ?? 'all',
+    plugins: loadPlugins(store.file),
     now: new Date(),
     message: options.message ?? '',
     ok: true,
@@ -39,6 +41,7 @@ export function createSession(store, options = {}) {
       this.updatedAt = current.updatedAt
       this.exists = current.exists
       this.corrupted = Boolean(current.corrupted)
+      this.plugins = loadPlugins(this.store.file)
       this.clampCursor()
     },
     save(next) {
@@ -112,6 +115,7 @@ const PAGE_ALIASES = {
   today: 'today', t: 'today', 今日: 'today',
   habits: 'habits', habit: 'habits', h: 'habits', 习惯: 'habits',
   tasks: 'tasks', task: 'tasks', k: 'tasks', 待办: 'tasks',
+  heatmap: 'heatmap', heat: 'heatmap', 热力: 'heatmap', 热力图: 'heatmap',
 }
 
 function fail(message) {
@@ -139,6 +143,7 @@ export function helpLines(theme, bindings = DEFAULT_BINDINGS) {
     cmd('today / t', '回到今日概览'),
     cmd('habits / h', '习惯打卡与周视图'),
     cmd('tasks / k', '待办清单（filter 切换筛选）'),
+    cmd('heatmap / 热力图', '年度专注时长热力图（需开启插件）'),
     '',
     head('习惯'),
     cmd('check <习惯>', '切换今天的打卡状态'),
@@ -165,11 +170,14 @@ export function helpLines(theme, bindings = DEFAULT_BINDINGS) {
     cmd('where', '显示数据文件位置'),
     cmd('key [动作] [组合键]', '查看 / 修改快捷键位，key reset 恢复默认'),
     '',
+    head('插件'),
+    cmd('plugin [名称] [on|off]', '查看 / 开关插件，如 plugin heatmap off'),
+    '',
     head('快捷键'),
     key(`${keyHint(bindings, 'page1')} / ${keyHint(bindings, 'page2')} / ${keyHint(bindings, 'page3')} · ${keyHint(bindings, 'next-page')}`, '切换页面'),
     key(`${keyHint(bindings, 'down')} · ${keyHint(bindings, 'up')}`, '移动光标'),
     key(`${keyHint(bindings, 'toggle')} · ${keyHint(bindings, 'add')} · ${keyHint(bindings, 'edit')} · ${keyHint(bindings, 'delete')}`, '切换 / 添加 / 编辑 / 删除光标项'),
-    key(`${keyHint(bindings, 'focus')} · ${keyHint(bindings, 'filter')} · ${keyHint(bindings, 'reload')}`, '专注 / 筛选 / 重新读取'),
+    key(`${keyHint(bindings, 'focus')} · ${keyHint(bindings, 'filter')} · ${keyHint(bindings, 'heatmap')} · ${keyHint(bindings, 'reload')}`, '专注 / 筛选 / 专注热力图 / 重新读取'),
     key(`${keyHint(bindings, 'command')} · ${keyHint(bindings, 'help')} · ${keyHint(bindings, 'quit')}`, '命令 · 帮助 · 退出'),
     '',
     theme.faint('  提示：#1 表示当前列表里的第一项；也可以用名称、ID 前缀或唯一标题片段。'),
@@ -240,8 +248,34 @@ export function runCommand(session, line) {
     return { ok: true, message: `${action} 已绑定到 ${name}`, keys: true, bindings: next }
   }
 
+  if (verb === 'plugin' || verb === 'plugins') {
+    const file = session.store.file
+    const current = loadPlugins(file)
+    const id = (args[0] ?? '').toLowerCase()
+    if (!id || id === 'list') {
+      const summary = PLUGINS.map((plugin) => `${plugin.id}=${pluginEnabled(current, plugin.id) ? 'on' : 'off'}`).join(' · ')
+      return { ok: true, message: `插件：${summary}。用 plugin <名称> on|off 开关。`, plugins: current }
+    }
+    const plugin = findPlugin(id)
+    if (!plugin) return fail(`没有名为「${id}」的插件，可用：${PLUGINS.map((entry) => entry.id).join(' ')}`)
+    const mode = (args[1] ?? 'toggle').toLowerCase()
+    let enabled
+    if (['on', 'enable', 'true', '开', '开启'].includes(mode)) enabled = true
+    else if (['off', 'disable', 'false', '关', '关闭'].includes(mode)) enabled = false
+    else if (['toggle', '切换'].includes(mode)) enabled = !pluginEnabled(current, id)
+    else return fail('用法：plugin [名称] [on|off|toggle]')
+    const next = { ...current, [id]: enabled }
+    savePlugins(file, next)
+    session.plugins = next
+    // 关掉当前正在看的插件页时退回今日，避免停在已隐藏的页面上。
+    if (!enabled && session.page === 'heatmap') session.page = 'today'
+    return done(session, `插件 ${plugin.label} 已${enabled ? '开启' : '关闭'}。`)
+  }
+
   if (PAGE_ALIASES[verb]) {
-    session.page = PAGE_ALIASES[verb]
+    const page = PAGE_ALIASES[verb]
+    if (page === 'heatmap' && !pluginEnabled(session.plugins, 'heatmap')) return fail('专注热力图插件已关闭，先用 plugin heatmap on 开启。')
+    session.page = page
     session.cursor = 0
     return { ok: true, message: '', page: session.page, resetCursor: true }
   }

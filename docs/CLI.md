@@ -39,6 +39,7 @@ Windows 上双击 `启动日常命令行.bat` 也可以。不需要 `npm install
 | `ctrl-f` | 开始 / 暂停番茄钟 |
 | `ctrl-r` | 重新读取数据文件 |
 | `ctrl-o` | 切换待办筛选（未完成 / 全部 / 已完成） |
+| `ctrl-n` | 打开专注热力图（插件开启时） |
 | `ctrl-p` | 输入命令，`Tab` 补全，`↑` `↓` 翻历史 |
 | `ctrl-g` | 帮助 |
 | `ctrl-q` | 退出 |
@@ -57,10 +58,24 @@ node cli/daily.mjs key quit -         # 恢复该动作的默认键位
 node cli/daily.mjs key reset          # 全部恢复默认
 ```
 
-- 可用动作：`quit` `help` `command` `toggle` `add` `edit` `delete` `focus` `reload` `filter` `up` `down` `top` `bottom` `next-page` `prev-page` `page1` `page2` `page3`。
+- 可用动作：`quit` `help` `command` `toggle` `add` `edit` `delete` `focus` `reload` `filter` `heatmap` `up` `down` `top` `bottom` `next-page` `prev-page` `page1` `page2` `page3`。
 - 按键写法：`ctrl-a` ~ `ctrl-z`（也接受 `ctrl+q`）、单个字符（区分大小写，如 `g` 与 `G`）、命名键 `up` / `down` / `left` / `right` / `home` / `end` / `tab` / `enter` / `space` / `esc` / `backspace` / `delete`。
 - 已被占用的键会提示先解除；`key <动作> -` 或 `key reset` 可随时恢复默认。
 - 在交互界面里改完键位立即生效，重启后依然有效。
+
+## 插件
+
+TUI 的可选功能以插件形式提供，开关状态保存在数据文件同目录的 `plugins.json`（只存与默认值的差异，和 `keys.json` 一样不受网页版同步影响）：
+
+```bash
+node cli/daily.mjs plugin                 # 查看插件与当前状态
+node cli/daily.mjs plugin heatmap off     # 关闭专注热力图
+node cli/daily.mjs plugin heatmap on      # 重新开启
+```
+
+### 专注热力图
+
+开启后标签栏会出现「热力」页，可用 `heatmap` 命令或 `ctrl-n` 直达：横轴是周、纵轴是星期几，每格代表一天，颜色越深表示当天的专注时长越久。数据来自番茄钟记录的 `sessions`，按本地日历日期汇总，没有专注的日子是浅色格；窄终端会自动减少显示的周数。关闭插件后该页从标签栏消失，`heatmap` 命令会提示先用 `plugin heatmap on` 开启。
 
 ## 命令
 
@@ -70,6 +85,7 @@ node cli/daily.mjs key reset          # 全部恢复默认
 today / t                  今日概览
 habits / h                 习惯打卡与周视图
 tasks / k                  待办清单
+heatmap / 热力图           年度专注时长热力图（插件）
 filter open|all|done       切换待办筛选
 
 check <习惯>               切换今天的打卡状态
@@ -91,6 +107,7 @@ export [路径]              导出 JSON 备份
 import <路径>              从 JSON 备份恢复
 where                      显示数据文件位置
 key [动作] [组合键]        查看 / 修改快捷键位，key reset 恢复默认
+plugin [名称] [on|off]     查看 / 开关插件，如 plugin heatmap off
 ```
 
 - `<习惯>`、`<待办>` 可以写名称、ID 前缀、唯一标题片段，也可以写 `#1`（当前列表第 1 项）。

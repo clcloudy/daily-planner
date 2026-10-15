@@ -1,7 +1,8 @@
 import { BREAK_MINUTES, FOCUS_MINUTES, createSession, summarize, todayKey } from '../src/core.mjs'
 import { helpLines, pageItems, runCommand } from './commands.mjs'
 import { buildLookup, keyLabel, loadBindings } from './keys.mjs'
-import { PAGES, focusChoiceKey, focusChoices, renderBody, renderFocusPicker, renderHeader, renderTabs, timerSeconds } from './views.mjs'
+import { pluginEnabled } from './plugins.mjs'
+import { activePages, focusChoiceKey, focusChoices, renderBody, renderFocusPicker, renderHeader, renderTabs, timerSeconds } from './views.mjs'
 import { truncate, width } from './theme.mjs'
 
 const ALT_SCREEN_ON = '\u001b[?1049h'
@@ -283,7 +284,7 @@ export function startTui({ session, theme, status = () => '' }) {
 
   function complete(text) {
     const [verb] = text.trimStart().split(/\s+/)
-    const verbs = ['today', 'habits', 'tasks', 'check', 'add habit', 'add task', 'done', 'undone', 'pri', 'due', 'del task', 'del habit', 'rename habit', 'filter', 'focus start', 'focus break', 'focus stop', 'sync', 'export', 'import', 'where', 'help', 'key', 'quit']
+    const verbs = ['today', 'habits', 'tasks', 'heatmap', 'check', 'add habit', 'add task', 'done', 'undone', 'pri', 'due', 'del task', 'del habit', 'rename habit', 'filter', 'focus start', 'focus break', 'focus stop', 'sync', 'export', 'import', 'where', 'help', 'key', 'plugin', 'quit']
     const matches = verbs.filter((candidate) => candidate.startsWith(verb || ''))
     if (!verb) return text
     if (matches.length === 1) return `${matches[0]} `
@@ -435,7 +436,8 @@ export function startTui({ session, theme, status = () => '' }) {
     }
     const action = lookup.get(key)
     if (!action) return
-    const pageIndex = PAGES.findIndex((page) => page.id === session.page)
+    const pages = activePages(session)
+    const pageIndex = Math.max(0, pages.findIndex((page) => page.id === session.page))
     switch (action) {
       case 'quit':
         close()
@@ -449,17 +451,26 @@ export function startTui({ session, theme, status = () => '' }) {
         inputCursor = 0
         return
       case 'next-page':
-        session.page = PAGES[(pageIndex + 1) % PAGES.length].id
+        session.page = pages[(pageIndex + 1) % pages.length].id
         session.cursor = 0
         return
       case 'prev-page':
-        session.page = PAGES[(pageIndex + PAGES.length - 1) % PAGES.length].id
+        session.page = pages[(pageIndex + pages.length - 1) % pages.length].id
         session.cursor = 0
         return
       case 'page1':
       case 'page2':
       case 'page3':
-        session.page = PAGES[Number(action.slice(4)) - 1].id
+        session.page = pages[Number(action.slice(4)) - 1].id
+        session.cursor = 0
+        return
+      case 'heatmap':
+        if (!pluginEnabled(session.plugins, 'heatmap')) {
+          session.message = '专注热力图插件已关闭，用 plugin heatmap on 开启。'
+          session.ok = true
+          return
+        }
+        session.page = 'heatmap'
         session.cursor = 0
         return
       case 'down': {
