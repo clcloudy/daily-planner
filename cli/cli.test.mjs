@@ -13,7 +13,7 @@ import { daemonStatus, serviceFiles, startDaemon, stopDaemon } from './daemon.mj
 import { buildHeatmap, focusMinutesByDay, heatLevel, monthLabels, renderHeatmap } from './heatmap.mjs'
 import { defaultPlugins, loadPlugins, pluginEnabled, savePlugins } from './plugins.mjs'
 import { createStore } from './store.mjs'
-import { createTheme, width } from './theme.mjs'
+import { createTheme, stripAnsi, width } from './theme.mjs'
 import { pageItems, renderBody } from './views.mjs'
 
 const theme = createTheme({ color: false })
@@ -240,6 +240,35 @@ describe('专注热力图', () => {
     expect(lines[0]).toContain('年度专注热力图')
     expect(lines.join('\n')).toContain('累计')
     expect(lines.join('\n')).toContain('30m')
+  })
+
+  it('格子彼此留有空隙，不会连成一片，月份标签与网格逐列对齐', () => {
+    const session = createSession(emptyStore())
+    const now = new Date('2026-10-17T09:00:00') // 周六
+    session.save({
+      ...session.data,
+      sessions: [
+        { id: 's1', date: '2026-10-12', minutes: 120 },
+        { id: 's2', date: '2026-10-13', minutes: 60 },
+        { id: 's3', date: '2026-10-14', minutes: 30 },
+      ],
+    })
+    const lines = renderHeatmap({ ...session, now }, createTheme({ color: true }), { width: 80 })
+    const monthRow = stripAnsi(lines[1])
+    const gridRows = lines.slice(3, 10).map((line) => stripAnsi(line))
+
+    // 有色终端一格只占上半行，纵向不会连成竖柱。
+    for (const row of gridRows) expect(row).not.toContain('█')
+    // 每格 2 列（方块 + 间隔），横向也不会出现两个方块紧挨着。
+    expect(gridRows.join('')).not.toContain('▀▀')
+
+    // 月份标签行与网格共用同一个左偏移，否则标签会整体错开一列。
+    // 偏移按显示列算，星期标签「日」是全角 2 列。
+    const displayColumn = (row, marker) => width(row.slice(0, row.indexOf(marker)))
+    const cellColumn = displayColumn(gridRows[0], '▀')
+    expect(cellColumn).toBe(3)
+    expect(gridRows.every((row) => displayColumn(row, '▀') === cellColumn)).toBe(true)
+    expect(displayColumn(monthRow, monthRow.trim()[0])).toBe(cellColumn)
   })
 
   it('今日页在空间足够时内嵌热力图，空间不足时省略', () => {

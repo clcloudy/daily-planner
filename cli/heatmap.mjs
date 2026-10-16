@@ -14,11 +14,19 @@ const HEAT_CODES = [238, 22, 28, 34, 71]
 export const HEAT_MAX_WEEKS = 53
 /** 一个格子占 2 列：方块 + 间隔，避免相邻方块连成一片。 */
 export const HEAT_CELL_WIDTH = 2
+/**
+ * 有色终端用上半块：一格只占半行高，纵向相邻的日期之间天然留白，
+ * 不会再连成一条竖柱；同时它是等宽字体里少数接近正方形的字形。
+ * 无色终端没有颜色可依赖，仍退回密度块字符表达深浅。
+ */
+const CELL = '▀'
 /** 今日页内嵌热力图的最小内容宽度，太窄就不挤进去。 */
 export const HEATMAP_EMBED_MIN_WIDTH = 46
+/** 左侧星期标签宽度：全角星期字 2 列 + 1 列间隔。 */
+const LABEL_WIDTH = 3
 
 /** 给定内容宽度能放下的周数（每 2 列一周）。 */
-export function visibleWeeks(contentWidth, labelWidth = 2) {
+export function visibleWeeks(contentWidth, labelWidth = LABEL_WIDTH) {
   return Math.max(1, Math.min(HEAT_MAX_WEEKS, Math.floor((contentWidth - labelWidth) / HEAT_CELL_WIDTH)))
 }
 
@@ -47,7 +55,8 @@ export function heatLevel(minutes, thresholds = HEAT_THRESHOLDS) {
 function shade(theme, level) {
   const safe = Math.max(0, Math.min(level, BLOCKS.length - 1))
   if (!theme?.enabled) return BLOCKS[safe]
-  return `\u001b[38;5;${HEAT_CODES[safe]}m${safe === 0 ? '·' : '█'}\u001b[0m`
+  // 0 级是空格子，用暗灰描出格子轮廓，和 GitHub 的贡献图一致。
+  return `\u001b[38;5;${HEAT_CODES[safe]}m${CELL}\u001b[0m`
 }
 
 /**
@@ -108,7 +117,7 @@ export function monthLabels(columns) {
 
 export function renderHeatmap(state, theme, options = {}) {
   const contentWidth = options.width ?? 80
-  const labelWidth = 2
+  const labelWidth = LABEL_WIDTH
   const weeks = options.weeks ?? visibleWeeks(contentWidth, labelWidth)
   const grid = buildHeatmap(state.now ?? new Date(), state.data?.sessions ?? [], { weeks })
   const endDate = dayKey(grid.end)
@@ -117,6 +126,8 @@ export function renderHeatmap(state, theme, options = {}) {
 
   const lines = [truncate(title, contentWidth)]
   lines.push(theme.faint(`${' '.repeat(labelWidth)}${monthLabels(grid.columns)}`))
+  // 月份标签和网格之间空一行：格子只占上半行，紧贴着会糊成一片。
+  lines.push('')
   for (let day = 0; day < 7; day += 1) {
     const cells = grid.columns
       .map((column) => (column[day].future ? ' '.repeat(HEAT_CELL_WIDTH) : `${shade(theme, column[day].level)} `))
